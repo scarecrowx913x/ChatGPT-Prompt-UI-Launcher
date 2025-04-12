@@ -2,12 +2,15 @@
 // @name         ChatGPT Prompt UI Launcher (URL要約＆解説＋詳細確認)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
 // @version      1.3
-// @description  URLをブラウズして要約 or 解説＋詳細確認までできるUIボタン✨
+// @description  URLをブラウズして要約 or 解説＋詳細確認までできるUIボタン
 // @author       junx913x
-// @supportURL    https://github.com/junx913x/chatgpt-ui-launcher
+// @supportURL   https://github.com/junx913x/chatgpt-ui-launcher
 // @match        *://*/*
 // @grant        GM_setClipboard
+// @updateURL    https://raw.githubusercontent.com/junx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
+// @downloadURL  https://raw.githubusercontent.com/junx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
 // ==/UserScript==
+
 
 
 (function () {
