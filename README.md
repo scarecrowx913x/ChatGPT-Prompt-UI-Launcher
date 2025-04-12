@@ -30,4 +30,8 @@
 3. プロンプトがクリップボードにコピーされ、自動で ChatGPT が開きます  
 4. 開いたチャット画面にペーストし、プロンプトを送信してください
 
+## License
+
+This project is licensed under the MIT License.  
+See the [LICENSE](./LICENSE) file for details.
 
