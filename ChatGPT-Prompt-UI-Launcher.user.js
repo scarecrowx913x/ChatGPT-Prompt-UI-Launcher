@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (URL要約＆解説＋詳細確認)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.5
+// @version      0.6
 // @description  URLをブラウズして要約 or 解説＋詳細確認までできるUIボタン
 // @author       junx913x
 // @supportURL   https://github.com/junx913x/chatgpt-ui-launcher
@@ -11,10 +11,16 @@
 // @downloadURL  https://raw.githubusercontent.com/junx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
 // ==/UserScript==
 
-
-
 (function () {
-    // ボタン用スタイル設定
+    'use strict';
+
+    // iframe内では実行しない😉
+    if (window.top !== window.self) return;
+
+    // 既に追加済みなら繰り返さない💯
+    if (document.getElementById('chatgpt-ui-launcher')) return;
+
+    // ボタン用スタイル設定🎨
     const style = document.createElement("style");
     style.textContent = `
     .chatgpt-launcher {
@@ -43,8 +49,9 @@
     `;
     document.head.appendChild(style);
 
-    // UIコンテナ作成
+    // UIコンテナ作成👍
     const container = document.createElement("div");
+    container.id = "chatgpt-ui-launcher";
     container.className = "chatgpt-launcher";
 
     // 🔍 要約ボタン
@@ -80,7 +87,7 @@ ${tabURL}
         window.open("https://chat.openai.com/chat", "_blank");
     };
 
-    // ボタン追加
+    // ボタンをコンテナに追加＆bodyへ👆
     container.appendChild(btnSummary);
     container.appendChild(btnExplain);
     document.body.appendChild(container);
