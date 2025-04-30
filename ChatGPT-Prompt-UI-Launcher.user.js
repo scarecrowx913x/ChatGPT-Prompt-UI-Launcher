@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         ChatGPT Prompt UI Launcher
+// @name         ChatGPT Prompt UI Launcher (モーダル改良版)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.8.1
-// @description  モーダルで「開く or コピー」を直感的に選べる🎀
-// @author       junx913x
+// @version      0.9
+// @description  オーバーレイ背景＆✕ボタンでキャンセル対応🎀
+// @author       junx913x (改良 by あなた)
 // @match        *://*/*
 // @grant        GM_setClipboard
 // ==/UserScript==
@@ -13,87 +13,121 @@
   if (window.top !== window.self) return;
   if (document.getElementById('chatgpt-ui-launcher')) return;
 
-  // --- 共通スタイル & モーダル用CSS ---
+  // --- CSS追加 ---
   const style = document.createElement("style");
   style.textContent = `
-    /* ボタン周り */
-    .chatgpt-btn { background-color: #10a37f; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+    /* ボタン共通 */
+    .chatgpt-btn {
+      background-color: #10a37f; color: #fff; border: none;
+      padding: 6px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 13px; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
     .chatgpt-btn:hover { background-color: #0e8f70; }
 
-    /* モーダルオーバーレイ */
+    /* オーバーレイ */
     .cgpt-modal-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
-      z-index: 10000;
+      background: rgba(0,0,0,0.5); display: flex;
+      align-items: center; justify-content: center; z-index: 10000;
     }
     /* モーダル本体 */
     .cgpt-modal {
+      position: relative;
       background: #fff; padding: 20px; border-radius: 8px;
-      text-align: center; max-width: 300px; width: 80%;
+      text-align: center; max-width: 320px; width: 90%;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
-    /* モーダル内ボタン */
+    /* 閉じるボタン */
+    .cgpt-modal-close {
+      position: absolute; top: 8px; right: 8px;
+      background: transparent; border: none;
+      font-size: 18px; cursor: pointer; color: #666;
+    }
+    .cgpt-modal-close:hover { color: #000; }
+
+    /* モーダル内選択ボタン */
     .cgpt-modal-btn {
-      margin: 8px; padding: 8px 16px; border: none; border-radius: 4px;
-      cursor: pointer; font-size: 14px; font-weight: bold;
+      margin: 12px 8px 0; padding: 10px 16px;
+      border: none; border-radius: 4px; cursor: pointer;
+      font-size: 14px; font-weight: bold;
     }
     .cgpt-modal-btn.open { background: #10a37f; color: #fff; }
-    .cgpt-modal-btn.copy { background: #ccc; color: #333; }
+    .cgpt-modal-btn.copy { background: #eee; color: #333; }
   `;
   document.head.appendChild(style);
 
   // --- モーダル表示＆選択処理 ---
   function showActionModal(promptText) {
-    // overlay作成
+    // オーバーレイ
     const overlay = document.createElement('div');
     overlay.className = 'cgpt-modal-overlay';
-    // modal作成
+
+    // モーダル本体
     const modal = document.createElement('div');
     modal.className = 'cgpt-modal';
-    modal.innerHTML = `<p>どうする？</p>`;
-    // ボタン作成
+
+    // ✕ボタン
+    const btnClose = document.createElement('button');
+    btnClose.className = 'cgpt-modal-close';
+    btnClose.textContent = '✕';
+    modal.appendChild(btnClose);
+
+    // タイトル
+    const title = document.createElement('p');
+    title.textContent = 'どうする？';
+    modal.appendChild(title);
+
+    // 「開く」ボタン
     const btnOpen = document.createElement('button');
     btnOpen.textContent = 'ChatGPTを開く 🌐';
     btnOpen.className = 'cgpt-modal-btn open';
+    modal.appendChild(btnOpen);
+
+    // 「コピー」ボタン
     const btnCopy = document.createElement('button');
     btnCopy.textContent = 'プロンプトだけコピー 📋';
     btnCopy.className = 'cgpt-modal-btn copy';
-
-    modal.appendChild(btnOpen);
     modal.appendChild(btnCopy);
+
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    // ボタンイベント
+    // 閉じる処理
+    function closeModal() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    btnClose.addEventListener('click', closeModal);
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) closeModal();
+    });
+
+    // 開く or コピー
     btnOpen.addEventListener('click', () => {
-      cleanup();
+      closeModal();
       GM_setClipboard(promptText);
       window.open('https://chat.openai.com/chat', '_blank');
       alert('🚀 ChatGPTを開いたよ！');
     });
     btnCopy.addEventListener('click', () => {
-      cleanup();
+      closeModal();
       GM_setClipboard(promptText);
       alert('📋 プロンプトをコピーしたよ！');
     });
-
-    function cleanup() {
-      document.body.removeChild(overlay);
-    }
   }
 
-  // --- 汎用アクション関数 ---
+  // --- 汎用アクション ---
   function handleAction(promptText) {
     showActionModal(promptText);
   }
 
-  // --- UIコンテナ & ボタン追加 ---
+  // --- 固定ボタンUI配置 ---
   const container = document.createElement("div");
   container.id = "chatgpt-ui-launcher";
-  container.style = "position: fixed; bottom: 20px; left: 20px; z-index:9999; display:flex; flex-direction:column; gap:6px;";
+  container.style = "position:fixed;bottom:20px;left:20px;z-index:9999;display:flex;flex-direction:column;gap:6px;";
 
   // 要約ボタン
   const btnSummary = document.createElement("button");
-  btnSummary.textContent = "📘要約";
+  btnSummary.textContent = " 📘要約";
   btnSummary.className = "chatgpt-btn";
   btnSummary.onclick = () => {
     const url = window.location.href;
@@ -103,7 +137,7 @@
 
   // 解説ボタン
   const btnExplain = document.createElement("button");
-  btnExplain.textContent = "🔍️解説";
+  btnExplain.textContent = " 🔍️解説";
   btnExplain.className = "chatgpt-btn";
   btnExplain.onclick = () => {
     const url = window.location.href;
