@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         ChatGPT Prompt UI Launcher (モーダル選択版)
+// @name         ChatGPT Prompt UI Launcher
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.8
+// @version      0.8.1
 // @description  モーダルで「開く or コピー」を直感的に選べる🎀
-// @author       junx913x (改良 by あなた)
+// @author       junx913x
 // @match        *://*/*
 // @grant        GM_setClipboard
 // ==/UserScript==
@@ -93,7 +93,7 @@
 
   // 要約ボタン
   const btnSummary = document.createElement("button");
-  btnSummary.textContent = " 要約";
+  btnSummary.textContent = "📘要約";
   btnSummary.className = "chatgpt-btn";
   btnSummary.onclick = () => {
     const url = window.location.href;
@@ -103,7 +103,7 @@
 
   // 解説ボタン
   const btnExplain = document.createElement("button");
-  btnExplain.textContent = " 解説";
+  btnExplain.textContent = "🔍️解説";
   btnExplain.className = "chatgpt-btn";
   btnExplain.onclick = () => {
     const url = window.location.href;
