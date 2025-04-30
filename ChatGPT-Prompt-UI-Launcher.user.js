@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         ChatGPT Prompt UI Launcher (モーダル改良版)
+// @name         ChatGPT Prompt UI Launcher
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.9
+// @version      0.8.2
 // @description  オーバーレイ背景＆✕ボタンでキャンセル対応🎀
 // @author       junx913x (改良 by あなた)
 // @match        *://*/*
