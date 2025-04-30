@@ -1,94 +1,70 @@
 // ==UserScript==
-// @name         ChatGPT Prompt UI Launcher (URL要約＆解説＋詳細確認)
+// @name         ChatGPT Prompt UI Launcher (選択式バージョン)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.6
-// @description  URLをブラウズして要約 or 解説＋詳細確認までできるUIボタン
-// @author       junx913x
-// @supportURL   https://github.com/junx913x/chatgpt-ui-launcher
+// @version      0.7
+// @description  URL要約＆解説 + 「開く or コピーだけ」選択フロー付き
+// @author       junx913x (改良 by あなた)
 // @match        *://*/*
 // @grant        GM_setClipboard
-// @updateURL    https://raw.githubusercontent.com/junx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
-// @downloadURL  https://raw.githubusercontent.com/junx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
 // ==/UserScript==
 
-(function () {
-    'use strict';
+(function() {
+  'use strict';
+  if (window.top !== window.self) return;
+  if (document.getElementById('chatgpt-ui-launcher')) return;
 
-    // iframe内では実行しない😉
-    if (window.top !== window.self) return;
+  // --- 共通スタイル ---
+  const style = document.createElement("style");
+  style.textContent = `
+    .chatgpt-launcher { position: fixed; bottom: 20px; left: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 6px; }
+    .chatgpt-btn { background-color: #10a37f; color: white; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+    .chatgpt-btn:hover { background-color: #0e8f70; }
+  `;
+  document.head.appendChild(style);
 
-    // 既に追加済みなら繰り返さない💯
-    if (document.getElementById('chatgpt-ui-launcher')) return;
+  // --- UIコンテナ ---
+  const container = document.createElement("div");
+  container.id = "chatgpt-ui-launcher";
+  container.className = "chatgpt-launcher";
 
-    // ボタン用スタイル設定🎨
-    const style = document.createElement("style");
-    style.textContent = `
-    .chatgpt-launcher {
-        position: fixed;
-        bottom: 20px;
-        left: 20px;
-        z-index: 9999;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
+  // --- 汎用アクション関数 ---
+  function handleAction(promptText, successMsg) {
+    const choice = window.prompt(
+      "どうする？\n1: ChatGPTを開く🌐\n2: プロンプトだけコピー📋",
+      "1"
+    );
+    if (choice === "2") {
+      GM_setClipboard(promptText);
+      alert("📋 プロンプトだけコピーしたよ！");
+    } else {
+      GM_setClipboard(promptText);
+      alert("🚀 プロンプトをコピーしてChatGPTを開くね！");
+      window.open("https://chat.openai.com/chat", "_blank");
     }
-    .chatgpt-btn {
-        background-color: #10a37f;
-        color: white;
-        border: none;
-        padding: 6px 10px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: bold;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-    }
-    .chatgpt-btn:hover {
-        background-color: #0e8f70;
-    }
-    `;
-    document.head.appendChild(style);
+  }
 
-    // UIコンテナ作成👍
-    const container = document.createElement("div");
-    container.id = "chatgpt-ui-launcher";
-    container.className = "chatgpt-launcher";
+  // --- 要約ボタン ---
+  const btnSummary = document.createElement("button");
+  btnSummary.textContent = " 要約";
+  btnSummary.className = "chatgpt-btn";
+  btnSummary.onclick = () => {
+    const url = window.location.href;
+    const promptText = `Please visit and analyze the following page: ${url}\nSummarize the key points in Japanese using headers and bullet points.`;
+    handleAction(promptText);
+  };
 
-    // 🔍 要約ボタン
-    const btnSummary = document.createElement("button");
-    btnSummary.textContent = "🔍 要約";
-    btnSummary.className = "chatgpt-btn";
-    btnSummary.onclick = () => {
-        const tabURL = window.location.href;
-        const prompt = `Please visit and analyze the following page:
-${tabURL}
+  // --- 解説ボタン ---
+  const btnExplain = document.createElement("button");
+  btnExplain.textContent = " 解説";
+  btnExplain.className = "chatgpt-btn";
+  btnExplain.onclick = () => {
+    const url = window.location.href;
+    const promptText = `Please visit and analyze the following page: ${url}\n1. First, explain the key concepts in this page using simple Japanese words.\n2. At the end of your explanation, provide a table of contents listing the main topics you covered.\n3. Then ask the user which topic they would like more detailed information on.\n4. After the user selects a topic, provide a detailed explanation for that topic.`;
+    handleAction(promptText);
+  };
 
-Summarize the key points in Japanese using headers and bullet points.`;
-        GM_setClipboard(prompt);
-        alert("✅ 要約プロンプトをコピーしたよ〜！ChatGPTに貼って送信してね♪");
-        window.open("https://chat.openai.com/chat", "_blank");
-    };
-
-    // 💬 解説ボタン（詳細確認フロー付き）
-    const btnExplain = document.createElement("button");
-    btnExplain.textContent = "💬 解説";
-    btnExplain.className = "chatgpt-btn";
-    btnExplain.onclick = () => {
-        const tabURL = window.location.href;
-        const prompt = `Please visit and analyze the following page:
-${tabURL}
-
-1. First, explain the key concepts in this page using simple Japanese words.
-2. At the end of your explanation, provide a table of contents listing the main topics you covered.
-3. Then ask the user which topic they would like more detailed information on.
-4. After the user selects a topic, provide a detailed explanation for that topic.`;
-        GM_setClipboard(prompt);
-        alert("✅ 解説プロンプトをコピーしたよ〜！ChatGPTに貼って送信してね♪");
-        window.open("https://chat.openai.com/chat", "_blank");
-    };
-
-    // ボタンをコンテナに追加＆bodyへ👆
-    container.appendChild(btnSummary);
-    container.appendChild(btnExplain);
-    document.body.appendChild(container);
+  // --- ページに追加 ---
+  container.appendChild(btnSummary);
+  container.appendChild(btnExplain);
+  document.body.appendChild(container);
 })();
