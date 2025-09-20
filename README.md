@@ -2,8 +2,6 @@
 
 ページ端に「📘要約 / 🔍️解説」のランチャーを常駐表示。押すとモーダルで「ChatGPTを開く」または「プロンプトだけコピー」を選べます。URLを自動でプロンプトへ含め、素早く要約・解説を実行できます。
 
-![Desktop](docs/screenshot-desktop.png)
-![Mobile](docs/screenshot-mobile.png)
 
 ## 🚀 インストール
 
