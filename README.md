@@ -2,14 +2,29 @@
 
 ページ端に「📘要約 / 🔍️解説」のランチャーを常駐表示。押すとモーダルで「ChatGPTを開く」または「プロンプトだけコピー」を選べます。URLを自動でプロンプトへ含め、素早く要約・解説を実行できます。
 
+[![Install Userscript](https://img.shields.io/badge/Install-UserScript-10a37f)](https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js)
+
+![Desktop](docs/screenshot-desktop.png)
+![Mobile](docs/screenshot-mobile.png)
+
+---
 
 ## 🚀 インストール
 
-1. ブラウザに Userscript マネージャ（Tampermonkey / Violentmonkey など）を導入  
-2. 下記を開いて「インストール」  
-   - **Raw**: `https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js`
+**ワンクリック（推奨）**  
+- 👉 [インストール（Raw .user.js）](https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js)
 
-> リポジトリ: https://github.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher
+**Userscript マネージャが未導入の方**  
+1. ブラウザに Userscript マネージャ（Tampermonkey / Violentmonkey など）をインストール  
+2. 上の「インストール（Raw .user.js）」リンクを開いて **Install** を選択
+
+**コピペ用URL**  
+https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
+
+**リポジトリ**  
+- https://github.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher
+
+---
 
 ## ✨ 主な機能
 
