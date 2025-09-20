@@ -1,151 +1,154 @@
 // ==UserScript==
 // @name         ChatGPT-Prompt-UI-Launcher
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.8.2
-// @description  オーバーレイ背景＆✕ボタンでキャンセル対応🎀
+// @version      0.9.0
+// @description  オーバーレイ＆ESC＆フォールバック実装。選択テキスト/ダークテーマ/高z-index対応🎀
 // @author       junx913x
 // @match        *://*/*
+// @run-at       document-end
+// @noframes
 // @grant        GM_setClipboard
+// @grant        GM_openInTab
 // ==/UserScript==
-
 (function() {
   'use strict';
   if (window.top !== window.self) return;
   if (document.getElementById('chatgpt-ui-launcher')) return;
 
-  // --- CSS追加 ---
+  const CHATGPT_URLS = ['https://chat.openai.com/','https://chatgpt.com/'];
+
+  function copyToClipboard(text) {
+    try {
+      if (typeof GM_setClipboard === 'function') { GM_setClipboard(text); return Promise.resolve(); }
+      throw new Error();
+    } catch(_) {
+      if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+      return new Promise((res, rej) => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+          document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); res();
+        } catch(e){ rej(e); }
+      });
+    }
+  }
+  function openChatGPT() {
+    const u = CHATGPT_URLS[0];
+    try {
+      if (typeof GM_openInTab === 'function') GM_openInTab(u, {active:true,setParent:true});
+      else window.open(u, '_blank', 'noopener');
+    } catch(_) { window.location.href = u; }
+  }
+
   const style = document.createElement("style");
   style.textContent = `
-    /* ボタン共通 */
-    .chatgpt-btn {
-      background-color: #10a37f; color: #fff; border: none;
-      padding: 6px 10px; border-radius: 6px; cursor: pointer;
-      font-size: 13px; font-weight: bold; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    :root{--cgpt-bg:#fff;--cgpt-fg:#111;--cgpt-ol:rgba(0,0,0,.5);--cgpt-ac:#10a37f;--cgpt-ac2:#0e8f70;--cgpt-m:#eee;--cgpt-mf:#333;--cgpt-z:2147483647}
+    @media (prefers-color-scheme: dark){
+      :root{--cgpt-bg:#1f1f1f;--cgpt-fg:#eaeaea;--cgpt-m:#2a2a2a;--cgpt-mf:#ddd}
     }
-    .chatgpt-btn:hover { background-color: #0e8f70; }
-
-    /* オーバーレイ */
-    .cgpt-modal-overlay {
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.5); display: flex;
-      align-items: center; justify-content: center; z-index: 10000;
-    }
-    /* モーダル本体 */
-    .cgpt-modal {
-      position: relative;
-      background: #fff; padding: 20px; border-radius: 8px;
-      text-align: center; max-width: 320px; width: 90%;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    /* 閉じるボタン */
-    .cgpt-modal-close {
-      position: absolute; top: 8px; right: 8px;
-      background: transparent; border: none;
-      font-size: 18px; cursor: pointer; color: #666;
-    }
-    .cgpt-modal-close:hover { color: #000; }
-
-    /* モーダル内選択ボタン */
-    .cgpt-modal-btn {
-      margin: 12px 8px 0; padding: 10px 16px;
-      border: none; border-radius: 4px; cursor: pointer;
-      font-size: 14px; font-weight: bold;
-    }
-    .cgpt-modal-btn.open { background: #10a37f; color: #fff; }
-    .cgpt-modal-btn.copy { background: #eee; color: #333; }
+    .chatgpt-btn{background:var(--cgpt-ac);color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,.2)}
+    .chatgpt-btn:hover{background:var(--cgpt-ac2)}
+    .cgpt-modal-overlay{position:fixed;inset:0;background:var(--cgpt-ol);display:flex;align-items:center;justify-content:center;z-index:var(--cgpt-z)}
+    .cgpt-modal{position:relative;background:var(--cgpt-bg);color:var(--cgpt-fg);padding:20px;border-radius:8px;text-align:center;max-width:320px;width:90%;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+    .cgpt-modal-close{position:absolute;top:8px;right:8px;background:transparent;border:none;font-size:18px;cursor:pointer;color:#888}
+    .cgpt-modal-close:hover{color:#fff}
+    .cgpt-modal-btn{margin:12px 8px 0;padding:10px 16px;border:none;border-radius:4px;cursor:pointer;font-size:14px;font-weight:bold}
+    .cgpt-modal-btn.open{background:var(--cgpt-ac);color:#fff}
+    .cgpt-modal-btn.copy{background:var(--cgpt-m);color:var(--cgpt-mf)}
+    #chatgpt-ui-launcher{position:fixed;bottom:20px;left:20px;z-index:var(--cgpt-z);display:flex;flex-direction:column;gap:6px}
+    .cgpt-toast{position:fixed;bottom:20px;right:20px;z-index:var(--cgpt-z);background:var(--cgpt-bg);color:var(--cgpt-fg);padding:10px 14px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.3)}
   `;
   document.head.appendChild(style);
 
-  // --- モーダル表示＆選択処理 ---
+  function toast(msg){
+    const t=document.createElement('div'); t.className='cgpt-toast'; t.textContent=msg;
+    document.body.appendChild(t); setTimeout(()=>t.remove(), 2400);
+  }
+
+  let openerButton=null;
   function showActionModal(promptText) {
-    // オーバーレイ
-    const overlay = document.createElement('div');
-    overlay.className = 'cgpt-modal-overlay';
+    const prevOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = 'hidden';
 
-    // モーダル本体
-    const modal = document.createElement('div');
-    modal.className = 'cgpt-modal';
+    const overlay = document.createElement('div'); overlay.className='cgpt-modal-overlay';
+    const modal = document.createElement('div'); modal.className='cgpt-modal'; modal.setAttribute('role','dialog'); modal.setAttribute('aria-modal','true');
 
-    // ✕ボタン
-    const btnClose = document.createElement('button');
-    btnClose.className = 'cgpt-modal-close';
-    btnClose.textContent = '✕';
-    modal.appendChild(btnClose);
+    const btnClose=document.createElement('button'); btnClose.className='cgpt-modal-close'; btnClose.textContent='✕'; modal.appendChild(btnClose);
+    const title=document.createElement('p'); title.textContent='どうする？'; modal.appendChild(title);
 
-    // タイトル
-    const title = document.createElement('p');
-    title.textContent = 'どうする？';
-    modal.appendChild(title);
+    const btnOpen=document.createElement('button'); btnOpen.textContent='ChatGPTを開く 🌐'; btnOpen.className='cgpt-modal-btn open'; modal.appendChild(btnOpen);
+    const btnCopy=document.createElement('button'); btnCopy.textContent='プロンプトだけコピー 📋'; btnCopy.className='cgpt-modal-btn copy'; modal.appendChild(btnCopy);
 
-    // 「開く」ボタン
-    const btnOpen = document.createElement('button');
-    btnOpen.textContent = 'ChatGPTを開く 🌐';
-    btnOpen.className = 'cgpt-modal-btn open';
-    modal.appendChild(btnOpen);
+    overlay.appendChild(modal); document.body.appendChild(overlay);
 
-    // 「コピー」ボタン
-    const btnCopy = document.createElement('button');
-    btnCopy.textContent = 'プロンプトだけコピー 📋';
-    btnCopy.className = 'cgpt-modal-btn copy';
-    modal.appendChild(btnCopy);
+    const focusables = []; setTimeout(()=>{ focusables.push(...modal.querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')); focusables[0]?.focus(); },0);
 
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    // 閉じる処理
-    function closeModal() {
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-    }
+    function closeModal(){ overlay.remove(); document.documentElement.style.overflow = prevOverflow || ''; openerButton?.focus?.(); }
     btnClose.addEventListener('click', closeModal);
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay) closeModal();
-    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+    overlay.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
+      if (e.key === 'Tab' && focusables.length) {
+        const i=focusables.indexOf(document.activeElement); const dir=e.shiftKey?-1:1; const next=(i+dir+focusables.length)%focusables.length;
+        focusables[next].focus(); e.preventDefault();
+      }
+    }, {capture:true});
 
-    // 開く or コピー
-    btnOpen.addEventListener('click', () => {
+    btnOpen.addEventListener('click', async () => {
       closeModal();
-      GM_setClipboard(promptText);
-      window.open('https://chat.openai.com/chat', '_blank');
-      alert('🚀 ChatGPTを開いたよ！');
+      await copyToClipboard(promptText).catch(()=>{});
+      openChatGPT();
+      toast('🚀 ChatGPTを開いたよ！');
     });
-    btnCopy.addEventListener('click', () => {
+    btnCopy.addEventListener('click', async () => {
       closeModal();
-      GM_setClipboard(promptText);
-      alert('📋 プロンプトをコピーしたよ！');
+      await copyToClipboard(promptText).then(()=>toast('📋 コピーしたよ！')).catch(()=>toast('⚠️ コピー失敗…'));
     });
   }
 
-  // --- 汎用アクション ---
-  function handleAction(promptText) {
-    showActionModal(promptText);
+  function handleAction(promptText, btn){ openerButton = btn || null; showActionModal(promptText); }
+
+  function buildContextualPrompt(tpl){
+    const url=location.href, title=document.title||'';
+    const sel=(window.getSelection?.().toString()||'').trim();
+    return tpl.replace('{URL}',url).replace('{TITLE}',title).replace('{SELECTION}', sel ? `\n[Selection]\n${sel}\n` : '');
   }
 
-  // --- 固定ボタンUI配置 ---
   const container = document.createElement("div");
   container.id = "chatgpt-ui-launcher";
-  container.style = "position:fixed;bottom:20px;left:20px;z-index:9999;display:flex;flex-direction:column;gap:6px;";
-
-  // 要約ボタン
   const btnSummary = document.createElement("button");
-  btnSummary.textContent = " 📘要約";
-  btnSummary.className = "chatgpt-btn";
-  btnSummary.onclick = () => {
-    const url = window.location.href;
-    const promptText = `Please visit and analyze the following page: ${url}\nSummarize the key points in Japanese using headers and bullet points.`;
-    handleAction(promptText);
+  btnSummary.textContent = " 📘要約"; btnSummary.className="chatgpt-btn";
+  btnSummary.onclick = (e) => {
+    const promptText = buildContextualPrompt(
+`Please analyze:
+Title: {TITLE}
+URL: {URL}
+{SELECTION}
+Summarize the key points in Japanese using headers and bullet points.`);
+    handleAction(promptText, e.currentTarget);
   };
-
-  // 解説ボタン
   const btnExplain = document.createElement("button");
-  btnExplain.textContent = " 🔍️解説";
-  btnExplain.className = "chatgpt-btn";
-  btnExplain.onclick = () => {
-    const url = window.location.href;
-    const promptText = `Please visit and analyze the following page: ${url}\n1. First, explain the key concepts in this page using simple Japanese words.\n2. At the end of your explanation, provide a table of contents listing the main topics you covered.\n3. Then ask the user which topic they would like more detailed information on.\n4. After the user selects a topic, provide a detailed explanation for that topic.`;
-    handleAction(promptText);
+  btnExplain.textContent = " 🔍️解説"; btnExplain.className="chatgpt-btn";
+  btnExplain.onclick = (e) => {
+    const promptText = buildContextualPrompt(
+`Please analyze:
+Title: {TITLE}
+URL: {URL}
+{SELECTION}
+1) Explain key concepts in simple Japanese.
+2) Provide a table of contents.
+3) Ask which topic to dive deeper.
+4) After user chooses, provide a deep explanation.`);
+    handleAction(promptText, e.currentTarget);
   };
-
-  container.appendChild(btnSummary);
-  container.appendChild(btnExplain);
+  container.appendChild(btnSummary); container.appendChild(btnExplain);
   document.body.appendChild(container);
+
+  // Hotkeys: Alt+Shift+S/E
+  window.addEventListener('keydown', (e)=>{
+    if (e.altKey && e.shiftKey && !e.repeat){
+      if (e.key.toLowerCase()==='s'){ btnSummary.click(); }
+      if (e.key.toLowerCase()==='e'){ btnExplain.click(); }
+    }
+  });
 })();
