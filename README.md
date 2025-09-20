@@ -1,6 +1,8 @@
 # ChatGPT-Prompt-UI-Launcher
 
-ページ端に「📘要約 / 🔍️解説」のランチャーを常駐表示。押すとモーダルで「ChatGPTを開く」または「プロンプトだけコピー」を選べます。URLを自動でプロンプトへ含め、素早く要約・解説を実行できます。
+ページ端に「📘要約 / 🔍️解説」のランチャーを常駐表示。
+押すとモーダルで「ChatGPTを開く」または「プロンプトだけコピー」を選べます。
+URLを自動でプロンプトへ含め、素早く要約・解説を実行できます。
 
 [![Install Userscript](https://img.shields.io/badge/Install-UserScript-10a37f)](https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js)
 
