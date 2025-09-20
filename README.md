@@ -4,9 +4,6 @@
 
 [![Install Userscript](https://img.shields.io/badge/Install-UserScript-10a37f)](https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js)
 
-![Desktop](docs/screenshot-desktop.png)
-![Mobile](docs/screenshot-mobile.png)
-
 ---
 
 ## 🚀 インストール
