@@ -426,3 +426,8 @@ function applyCfg(container){
     arm();
   }
 }
+
+.chatgpt-gear{ background:transparent; border:none; cursor:pointer; font-size:16px; align-self:flex-start; }
+@media (pointer:coarse){
+  .chatgpt-btn{ padding:10px 14px; font-size:15px; } /* 指で押しやすく */
+}
