@@ -1,558 +1,578 @@
 // ==UserScript==
-// @name         ChatGPT-Prompt-UI-Launcher
-// @namespace    https://github.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher
-// @version      0.9.2
-// @description  オーバーレイ/ESC/Tab/トースト/選択テキスト注入/ダーク/ドラッグ/設定パネル/モバイル対応📱✨
+// @name         ChatGPT-Prompt-UI-Launcher (Fixed + ShadowDOM)
+// @namespace    https://github.com/scarecrowx913x/chatgpt-ui-launcher
+// @version      0.9.3
+// @description  Quick launcher for summary/explain prompts with draggable UI; mobile-safe; Shadow DOM; per-site position; initial-corner auto-avoid.
 // @author       scarecrowx913x
-// @license      MIT
 // @match        *://*/*
-// @run-at       document-end
-// @noframes
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
-// @downloadURL  https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
-// @updateURL    https://raw.githubusercontent.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/main/ChatGPT-Prompt-UI-Launcher.user.js
-// @supportURL   https://github.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher/issues
-// @homepageURL  https://github.com/scarecrowx913x/ChatGPT-Prompt-UI-Launcher
-// @icon         https://chat.openai.com/favicon.ico
+// @run-at       document-end
 // ==/UserScript==
 
-(function () {
+(() => {
   'use strict';
-  if (window.top !== window.self) return;
-  if (document.getElementById('chatgpt-ui-launcher')) return;
 
-  // ----------- Constants / Storage Keys -----------
-  const CHATGPT_URLS = ['https://chat.openai.com/', 'https://chatgpt.com/'];
-  const CFG_KEY = 'cgpt.launcher.cfg.v1';
-  const POS_KEY = 'cgpt.launcher.pos.v1';
+  // ---------- Config & Storage ----------
   const HOST = location.host;
-  const Z_TOP = 2147483647;
+  const CFG_KEY = 'cgpt.launcher.cfg.v2';
+  const POS_KEY_GLOBAL = 'cgpt.launcher.pos.v2';
+  const POS_KEY_SITE_PREFIX = 'cgpt.launcher.pos.v2:';
+  const TOAST_LIMIT = 3;
 
   const defaultCfg = {
-    positionMode: 'corner', // 'corner' | 'free'
-    corner: 'bl',           // 'bl' | 'br' | 'tl' | 'tr'
-    snap: true,
-    scale: 1.0,
-    opacity: 1.0,
-    autoMinimize: false,
-    autoMinimizeMs: 3000,
-    showOnMobile: true,
-    showOnDesktop: true,
-    perSiteOverride: false,
+    corner: 'bl',              // 'bl'|'br'|'tl'|'tr'
+    offsetX: 16,
+    offsetY: 16,
+    snap: 12,
+    minified: false,
+    perSiteOverride: false,    // true=位置をサイト別保存
+    hideOnChatGPT: true,       // chatgpt.com等ではUIを出さない
+    selectionMaxChars: 2000,   // {SELECTION} の上限
+    openChatGPT: true,         // コピー後にChatGPTを開く
+    language: 'ja',            // 予備
+    templates: {
+      summary: '以下のテキストを300字で要約：\\n\\n{SELECTION}\\n\\n#出力\\n・重要点を3つの箇条書き\\n・専門用語は一言補足\\n・最後に結論を一文',
+      explain: '以下のテキストを中学生にも分かるように解説：\\n\\n{SELECTION}\\n\\n#出力\\n・ポイント3つ\\n・比喩を1つ\\n・最後に注意点'
+    },
   };
 
-  // ----------- Utilities -----------
+  const chatgptHosts = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/i;
+
+  // 既存設定読み込み
   function loadCfg() {
     try {
-      const all = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
-      const base = { ...defaultCfg, ...(all._global || {}) };
-      if (base.perSiteOverride && all[HOST]) return { ...base, ...all[HOST] };
-      return base;
-    } catch { return { ...defaultCfg }; }
-  }
-
-  function saveCfg(newCfg) {
-    const all = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
-    const base = { ...defaultCfg, ...(all._global || {}) };
-    const merged = { ...base, ...newCfg };
-    if (merged.perSiteOverride) {
-      all._global = base;
-      all[HOST] = merged;
-    } else {
-      all._global = merged;
-      delete all[HOST];
+      const raw = localStorage.getItem(CFG_KEY);
+      if (!raw) return structuredClone(defaultCfg);
+      const parsed = JSON.parse(raw);
+      return deepMerge(structuredClone(defaultCfg), parsed);
+    } catch {
+      return structuredClone(defaultCfg);
     }
-    localStorage.setItem(CFG_KEY, JSON.stringify(all));
   }
-
-  function loadPos() {
-    try { return JSON.parse(localStorage.getItem(POS_KEY) || 'null'); } catch { return null; }
+  function saveCfg(cfg) {
+    localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
   }
-  function savePos(left, top) {
-    localStorage.setItem(POS_KEY, JSON.stringify({ left, top, ts: Date.now() }));
+  function posKey(cfg) {
+    return cfg.perSiteOverride ? (POS_KEY_SITE_PREFIX + HOST) : POS_KEY_GLOBAL;
   }
-
-  function vw() { return (window.visualViewport?.width ?? window.innerWidth); }
-  function vh() { return (window.visualViewport?.height ?? window.innerHeight); }
-  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-  function isMobile() { return matchMedia('(pointer:coarse)').matches || Math.min(screen.width, screen.height) < 768; }
-
-  async function copyToClipboard(text) {
+  function loadPos(cfg) {
     try {
-      if (typeof GM_setClipboard === 'function') { GM_setClipboard(text); return; }
-      throw new Error('GM_setClipboard unavailable');
-    } catch (_) {
-      if (navigator.clipboard?.writeText) {
-        try { await navigator.clipboard.writeText(text); return; } catch {}
+      const raw = localStorage.getItem(posKey(cfg));
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  function savePos(cfg, pos) {
+    localStorage.setItem(posKey(cfg), JSON.stringify(pos));
+  }
+
+  function deepMerge(base, add) {
+    for (const k of Object.keys(add || {})) {
+      if (add[k] && typeof add[k] === 'object' && !Array.isArray(add[k])) {
+        base[k] = deepMerge(base[k] || {}, add[k]);
+      } else {
+        base[k] = add[k];
       }
-      // textarea fallback
-      const ta = document.createElement('textarea');
-      ta.value = text;
+    }
+    return base;
+  }
+
+  let cfg = loadCfg();
+
+  // ChatGPTドメインで非表示
+  if (cfg.hideOnChatGPT && chatgptHosts.test(HOST)) return;
+
+  // ---------- Utilities ----------
+  const vw = () => (window.visualViewport?.width || window.innerWidth);
+  const vh = () => (window.visualViewport?.height || window.innerHeight);
+
+  function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
+  function snap(n, s) { return Math.round(n / s) * s; }
+
+  function el(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    Object.assign(node, props);
+    if (children && children.length) node.append(...children);
+    return node;
+  }
+
+  function getSelectionText(maxChars) {
+    const sel = document.getSelection();
+    let text = sel ? (sel.toString?.() || '') : '';
+    text = text.replace(/\s+$/,''); // 末尾整形
+    if (!maxChars || text.length <= maxChars) return text;
+    return text.slice(0, maxChars) + '\n...（長文のため省略）';
+  }
+
+  function copyToClipboard(text) {
+    try {
+      if (typeof GM_setClipboard === 'function') {
+        GM_setClipboard(text, 'text');
+        return true;
+      }
+    } catch {}
+    // フォールバック
+    try {
+      const ta = el('textarea', { value: text });
       ta.style.position = 'fixed';
       ta.style.opacity = '0';
-      ta.style.pointerEvents = 'none';
       document.body.appendChild(ta);
+      ta.focus();
       ta.select();
-      try { document.execCommand('copy'); } catch {}
+      const ok = document.execCommand('copy');
       ta.remove();
+      return ok;
+    } catch {
+      return false;
     }
   }
 
-  function openChatGPT() {
-    const u = CHATGPT_URLS.find(Boolean) || 'https://chat.openai.com/';
+  function openChatGPTTab() {
     try {
       if (typeof GM_openInTab === 'function') {
-        GM_openInTab(u, { active: true, setParent: true });
+        GM_openInTab('https://chatgpt.com/?utm_source=ui_launcher', { active: true, insert: true });
       } else {
-        window.open(u, '_blank', 'noopener');
+        window.open('https://chatgpt.com/?utm_source=ui_launcher', '_blank', 'noopener');
       }
-    } catch (_) { window.location.href = u; }
+    } catch {
+      window.open('https://chatgpt.com/?utm_source=ui_launcher', '_blank', 'noopener');
+    }
   }
 
-  // ----------- Styles -----------
-  const styleSafe = document.createElement('style');
-  styleSafe.textContent = `
-:root{
-  --safe-left: env(safe-area-inset-left, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-}
-`;
-  document.head.appendChild(styleSafe);
+  // 初回角の自動回避（左下が塞がれている場合に迂回）
+  function chooseInitialCorner(baseCorner) {
+    if (loadPos(cfg)) return baseCorner; // 既に手動位置あり
+    const order = (function* () {
+      // base → 他3角の順に試す
+      const arr = ['bl','br','tl','tr'];
+      yield baseCorner;
+      for (const c of arr) if (c !== baseCorner) yield c;
+    })();
+    for (const c of order) {
+      if (!isCornerBlocked(c)) return c;
+    }
+    return baseCorner;
+  }
 
-  const style = document.createElement('style');
+  function isCornerBlocked(corner) {
+    // 角から16px内側のポイントで elementFromPoint を見る
+    const margin = 16;
+    let x = margin, y = margin;
+    if (corner.includes('r')) x = vw() - margin;
+    if (corner.includes('b')) y = vh() - margin;
+    const elmt = document.elementFromPoint(x, y);
+    if (!elmt || elmt === document.documentElement || elmt === document.body) return false;
+    // 固定要素っぽい/ボタンっぽい要素はブロック判定
+    const cs = getComputedStyle(elmt);
+    const fixedish = cs.position === 'fixed' || cs.position === 'sticky';
+    const clickable = /(button|a|input|label|select|textarea)/i.test(elmt.tagName) || cs.cursor === 'pointer';
+    return fixedish || clickable;
+  }
+
+  // ---------- Shadow DOM Host ----------
+  const host = el('div', { id: 'cgpt-launcher-host' });
+  const shadow = host.attachShadow({ mode: 'open' });
+  document.documentElement.appendChild(host);
+
+  // Toast container（Shadow側）
+  const toastWrap = el('div', { id: 'cgpt-toast-wrap', role: 'region', 'aria-label': '通知' });
+  shadow.appendChild(toastWrap);
+
+  function showToast(message, type = 'info', ms = 2200) {
+    // 上限管理
+    while (toastWrap.childElementCount >= TOAST_LIMIT) {
+      toastWrap.firstElementChild?.remove();
+    }
+    const t = el('div', {
+      className: `cgpt-toast ${type}`,
+      role: 'status',
+      ariaLive: 'polite',
+      textContent: message
+    });
+    toastWrap.appendChild(t);
+    setTimeout(() => t.classList.add('show'), 10);
+    setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 300);
+    }, ms);
+  }
+
+  // ---------- Styles ----------
+  const style = el('style');
   style.textContent = `
-:root{
-  --cgpt-bg:#fff; --cgpt-fg:#111; --cgpt-ol:rgba(0,0,0,.5);
-  --cgpt-ac:#10a37f; --cgpt-ac2:#0e8f70; --cgpt-m:#eee; --cgpt-mf:#333;
-  --cgpt-z:${Z_TOP};
+:host, :root { --cgpt-z: 2147483647; --pad: 10px; }
+#cgpt-toast-wrap {
+  position: fixed; inset: auto 0 env(safe-area-inset-bottom) 0;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  display: grid; place-items: center; gap: 6px; z-index: var(--cgpt-z);
+  pointer-events: none;
 }
-@media (prefers-color-scheme: dark){
-  :root{ --cgpt-bg:#1f1f1f; --cgpt-fg:#eaeaea; --cgpt-m:#2a2a2a; --cgpt-mf:#ddd; }
+.cgpt-toast {
+  opacity: 0; transform: translateY(6px);
+  transition: opacity .18s ease, transform .18s ease;
+  background: rgba(24,24,27,.96); color: #fff; font: 12px/1.4 system-ui, sans-serif;
+  padding: 8px 12px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  pointer-events: auto; max-width: min(90vw, 480px);
 }
-.chatgpt-btn{
-  background:var(--cgpt-ac); color:#fff; border:none; padding:6px 10px;
-  border-radius:6px; cursor:pointer; font-size:13px; font-weight:bold;
-  box-shadow:0 2px 6px rgba(0,0,0,.2)
-}
-.chatgpt-btn:hover{ background:var(--cgpt-ac2); }
-.cgpt-modal-overlay{
-  position:fixed; inset:0; background:var(--cgpt-ol);
-  display:flex; align-items:center; justify-content:center; z-index:var(--cgpt-z);
-}
-.cgpt-modal{
-  position:relative; background:var(--cgpt-bg); color:var(--cgpt-fg);
-  padding:20px; border-radius:8px; text-align:center; max-width:360px; width:92%;
-  box-shadow:0 4px 12px rgba(0,0,0,.3)
-}
-.cgpt-modal-close{
-  position:absolute; top:8px; right:8px; background:transparent; border:none;
-  font-size:18px; cursor:pointer; color:#888
-}
-.cgpt-modal-close:hover{ color:#fff; }
-.cgpt-modal-btn{
-  margin:12px 8px 0; padding:10px 16px; border:none; border-radius:4px;
-  cursor:pointer; font-size:14px; font-weight:bold
-}
-.cgpt-modal-btn.open{ background:var(--cgpt-ac); color:#fff; }
-.cgpt-modal-btn.copy{ background:var(--cgpt-m); color:var(--cgpt-mf); }
-#chatgpt-ui-launcher{
-  position:fixed; z-index:var(--cgpt-z); display:flex; flex-direction:column; gap:6px;
-}
-.cgpt-toast{
-  position:fixed; bottom:calc(20px + var(--safe-bottom)); right:calc(20px + var(--safe-right));
-  z-index:var(--cgpt-z); background:var(--cgpt-bg); color:var(--cgpt-fg);
-  padding:10px 14px; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,.3)
-}
-.chatgpt-gear{
-  background:transparent; border:none; cursor:pointer; font-size:16px; align-self:flex-start;
-}
-.cgpt-dragbar{
-  height:8px; border-radius:6px; background:rgba(0,0,0,.2); cursor:move; margin-bottom:4px;
-}
-@media (pointer:coarse){
-  .chatgpt-btn{ padding:10px 14px; font-size:15px; }
-}
-`;
-  document.head.appendChild(style);
+.cgpt-toast.show { opacity: 1; transform: translateY(0); }
+.cgpt-toast.success { background: rgba(16,115,36,.96); }
+.cgpt-toast.warn { background: rgba(190,112,0,.96); }
+.cgpt-toast.error { background: rgba(166,22,22,.96); }
 
-  // ----------- Toast -----------
-  function toast(msg, ms = 2400) {
-    const t = document.createElement('div');
-    t.className = 'cgpt-toast';
-    t.textContent = msg;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), ms);
+/* Launcher */
+.wrap {
+  position: fixed; z-index: var(--cgpt-z);
+  inset: auto auto auto auto; /* left/top/right/bottomはJSで設定 */
+  display: grid; grid-auto-flow: row; gap: 6px;
+  filter: drop-shadow(0 6px 18px rgba(0,0,0,.22));
+  touch-action: none;
+}
+.box {
+  backdrop-filter: saturate(1.2) blur(6px);
+  background: color-mix(in lch, white 85%, transparent);
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 16px; padding: 8px;
+  min-width: 56px;
+}
+.dragbar {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+  cursor: grab; user-select: none; padding: 6px 8px 2px;
+}
+.dragbar:active { cursor: grabbing; }
+.title {
+  font: 600 12px/1 system-ui, sans-serif; color: #111; opacity: .7;
+}
+.controls { display: grid; grid-auto-flow: column; gap: 6px; justify-content: end; }
+.btn, .gear {
+  font: 600 12px/1 system-ui, sans-serif;
+  padding: 8px 10px; border-radius: 12px; border: 1px solid rgba(0,0,0,.08);
+  background: white; cursor: pointer;
+}
+.btn:active, .gear:active { transform: translateY(1px); }
+.btn { min-width: 64px; }
+.row { display: grid; grid-auto-flow: column; gap: 8px; }
+.small { font-size: 11px; opacity: .8; }
+
+.minibar {
+  display: grid; grid-auto-flow: column; gap: 6px; justify-content: center;
+}
+.mini {
+  width: 40px; height: 40px; border-radius: 12px; border: 1px solid rgba(0,0,0,.08);
+  background: white; cursor: pointer; display: grid; place-items: center;
+  font: 700 14px/1 system-ui, sans-serif;
+}
+
+.hidden { display: none !important; }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: grid; place-items: center; z-index: var(--cgpt-z);
+}
+.modal {
+  width: min(92vw, 720px); max-height: min(88vh, 720px); overflow: auto;
+  background: white; border-radius: 14px; padding: 16px;
+  border: 1px solid rgba(0,0,0,.08);
+}
+.modal header {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; margin-bottom: 8px;
+}
+.modal h2 { font: 700 16px/1.2 system-ui, sans-serif; margin: 0; }
+.xbtn { border: none; background: #0000; font-size: 16px; cursor: pointer; }
+.form { display: grid; gap: 12px; }
+.field { display: grid; gap: 6px; }
+label { font: 600 12px/1 system-ui, sans-serif; }
+input[type="number"], select, textarea {
+  border: 1px solid rgba(0,0,0,.15); border-radius: 10px; padding: 8px; font: 12px/1.4 system-ui, sans-serif;
+}
+textarea { min-height: 120px; resize: vertical; }
+.actions { display: grid; grid-auto-flow: column; justify-content: end; gap: 8px; margin-top: 8px; }
+  `;
+  shadow.appendChild(style);
+
+  // ---------- Layout / Elements ----------
+  const wrap = el('div', { className: 'wrap', id: 'cgpt-wrap' });
+  const box = el('div', { className: 'box', id: 'cgpt-box' });
+  const dragbar = el('div', { className: 'dragbar', id: 'cgpt-drag', role: 'button', tabIndex: 0, 'aria-label': 'ドラッグで移動' });
+  const title = el('div', { className: 'title', textContent: 'ChatGPT Launcher' });
+  const controls = el('div', { className: 'controls' });
+  const gear = el('button', { className: 'gear', textContent: '⚙️ 設定', 'aria-label': '設定を開く' });
+
+  const row = el('div', { className: 'row' });
+  const btnSum = el('button', { className: 'btn', textContent: '要約' });
+  const btnExp = el('button', { className: 'btn', textContent: '解説' });
+
+  const minibar = el('div', { className: 'minibar' });
+  const miniBtn = el('button', { className: 'mini', title: '開く', 'aria-label': '開く', textContent: '💬' });
+
+  controls.appendChild(gear);
+  dragbar.append(title, controls);
+  row.append(btnSum, btnExp);
+  box.append(dragbar, row, el('div', { className: 'small', textContent: 'Alt+ドラッグでどこでも移動／ダブルクリックで最小化' }));
+  wrap.append(box);
+  wrap.append(minibar);
+  minibar.append(miniBtn);
+  shadow.appendChild(wrap);
+
+  // 初期表示切替
+  function applyMinified(state) {
+    cfg.minified = !!state;
+    box.classList.toggle('hidden', cfg.minified);
+    minibar.classList.toggle('hidden', !cfg.minified);
+    saveCfg(cfg);
   }
 
-  // ----------- Modal (ESC/Tab trap/scroll lock) -----------
-  let openerButton = null;
-  function showActionModal(promptText) {
-    const prevOverflow = document.documentElement.style.overflow;
-    document.documentElement.style.overflow = 'hidden';
-
-    const overlay = document.createElement('div'); overlay.className = 'cgpt-modal-overlay';
-    const modal = document.createElement('div'); modal.className = 'cgpt-modal';
-    modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); modal.setAttribute('aria-label', 'ChatGPTアクション');
-
-    const btnClose = document.createElement('button'); btnClose.className = 'cgpt-modal-close'; btnClose.textContent = '✕';
-    const title = document.createElement('p'); title.textContent = 'どうする？';
-    const btnOpen = document.createElement('button'); btnOpen.className = 'cgpt-modal-btn open'; btnOpen.textContent = 'ChatGPTを開く 🌐';
-    const btnCopy = document.createElement('button'); btnCopy.className = 'cgpt-modal-btn copy'; btnCopy.textContent = 'プロンプトだけコピー 📋';
-
-    modal.append(btnClose, title, btnOpen, btnCopy);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    const focusables = [];
-    setTimeout(() => { focusables.push(...modal.querySelectorAll('button,[href],[tabindex]:not([tabindex="-1"])')); focusables[0]?.focus(); }, 0);
-
-    function closeModal() {
-      overlay.remove();
-      document.documentElement.style.overflow = prevOverflow || '';
-      openerButton?.focus?.();
-    }
-
-    btnClose.addEventListener('click', closeModal);
-    overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
-    overlay.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
-      if (e.key === 'Tab' && focusables.length) {
-        const i = focusables.indexOf(document.activeElement);
-        const dir = e.shiftKey ? -1 : 1;
-        const next = (i + dir + focusables.length) % focusables.length;
-        focusables[next].focus();
-        e.preventDefault();
-      }
-    }, { capture: true });
-
-    btnOpen.addEventListener('click', async () => {
-      closeModal();
-      await copyToClipboard(promptText).catch(() => {});
-      openChatGPT();
-      toast('🚀 ChatGPTを開いたよ！');
-    });
-    btnCopy.addEventListener('click', async () => {
-      closeModal();
-      try { await copyToClipboard(promptText); toast('📋 コピーしたよ！'); }
-      catch { toast('⚠️ コピー失敗…'); }
-    });
+  function applyCornerPos() {
+    // cfg.corner, cfg.offsetX/Y から fixedの辺を決定
+    wrap.style.left = wrap.style.right = wrap.style.top = wrap.style.bottom = 'auto';
+    const padX = Math.max(0, cfg.offsetX);
+    const padY = Math.max(0, cfg.offsetY);
+    if (cfg.corner.includes('l')) wrap.style.left = `calc(${padX}px + env(safe-area-inset-left))`;
+    else wrap.style.right = `calc(${padX}px + env(safe-area-inset-right))`;
+    if (cfg.corner.includes('t')) wrap.style.top = `calc(${padY}px + env(safe-area-inset-top))`;
+    else wrap.style.bottom = `calc(${padY}px + env(safe-area-inset-bottom))`;
   }
 
-  function handleAction(promptText, btn) { openerButton = btn || null; showActionModal(promptText); }
-
-  function buildContextualPrompt(template) {
-    const url = location.href;
-    const title = document.title || '';
-    const selection = (window.getSelection?.().toString() || '').trim();
-    return template
-      .replace('{URL}', url)
-      .replace('{TITLE}', title)
-      .replace('{SELECTION}', selection ? `\n[Selection]\n${selection}\n` : '');
-  }
-
-  // ----------- Settings Panel -----------
-  function showSettings(container, applyCfg) {
-    const cfg = loadCfg();
-
-    const wrap = document.createElement('div');
-    wrap.className = 'cgpt-modal-overlay';
-    const modal = document.createElement('div');
-    modal.className = 'cgpt-modal';
-    modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true');
-
-    const close = document.createElement('button');
-    close.className = 'cgpt-modal-close';
-    close.textContent = '✕';
-
-    const h = document.createElement('h3');
-    h.textContent = '設定';
-
-    function row(label, input, small) {
-      const r = document.createElement('div');
-      r.style.textAlign = 'left';
-      r.style.marginTop = '10px';
-      const l = document.createElement('label');
-      l.textContent = label;
-      l.style.display = 'block';
-      l.style.fontSize = '12px';
-      if (small) {
-        const s = document.createElement('div');
-        s.style.fontSize = '11px';
-        s.style.opacity = '0.75';
-        s.textContent = small;
-        r.appendChild(l); r.appendChild(s);
-      } else {
-        r.appendChild(l);
-      }
-      r.appendChild(input);
-      return r;
-    }
-
-    const selMode = document.createElement('select');
-    selMode.innerHTML = `<option value="corner">corner</option><option value="free">free</option>`;
-    selMode.value = cfg.positionMode;
-
-    const selCorner = document.createElement('select');
-    selCorner.innerHTML = `<option value="bl">左下</option><option value="br">右下</option><option value="tl">左上</option><option value="tr">右上</option>`;
-    selCorner.value = cfg.corner;
-
-    const chkSnap = document.createElement('input'); chkSnap.type = 'checkbox'; chkSnap.checked = cfg.snap;
-    const rngScale = document.createElement('input'); rngScale.type = 'range'; rngScale.min = '0.8'; rngScale.max = '1.4'; rngScale.step = '0.05'; rngScale.value = String(cfg.scale);
-    const rngOpacity = document.createElement('input'); rngOpacity.type = 'range'; rngOpacity.min = '0.35'; rngOpacity.max = '1'; rngOpacity.step = '0.05'; rngOpacity.value = String(cfg.opacity);
-    const chkAutoMin = document.createElement('input'); chkAutoMin.type = 'checkbox'; chkAutoMin.checked = cfg.autoMinimize;
-    const numAutoMs = document.createElement('input'); numAutoMs.type = 'number'; numAutoMs.min = '500'; numAutoMs.step = '100'; numAutoMs.value = String(cfg.autoMinimizeMs);
-    const chkMob = document.createElement('input'); chkMob.type = 'checkbox'; chkMob.checked = cfg.showOnMobile;
-    const chkDesk = document.createElement('input'); chkDesk.type = 'checkbox'; chkDesk.checked = cfg.showOnDesktop;
-    const chkPerSite = document.createElement('input'); chkPerSite.type = 'checkbox'; chkPerSite.checked = cfg.perSiteOverride;
-
-    const btnSave = document.createElement('button'); btnSave.className = 'cgpt-modal-btn open'; btnSave.textContent = '保存';
-    const btnReset = document.createElement('button'); btnReset.className = 'cgpt-modal-btn copy'; btnReset.textContent = 'リセット';
-
-    modal.append(
-      close, h,
-      row('位置モード', selMode, 'corner=四隅固定 / free=自由配置（ドラッグ可）'),
-      row('角（corner時）', selCorner),
-      row('スナップ（free時）', chkSnap),
-      row(`サイズ (${rngScale.value})`, rngScale),
-      row(`透明度 (${rngOpacity.value})`, rngOpacity),
-      row('自動ミニ化', chkAutoMin),
-      row('ミニ化までの時間(ms)', numAutoMs),
-      row('モバイルで表示', chkMob),
-      row('デスクトップで表示', chkDesk),
-      row(`サイト別設定（${HOST}）`, chkPerSite),
-      btnSave, btnReset
-    );
-    wrap.appendChild(modal);
-    document.body.appendChild(wrap);
-
-    close.onclick = () => wrap.remove();
-    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
-    rngScale.oninput = () => { rngScale.previousSibling.textContent = `サイズ (${rngScale.value})`; };
-    rngOpacity.oninput = () => { rngOpacity.previousSibling.textContent = `透明度 (${rngOpacity.value})`; };
-
-    btnSave.onclick = () => {
-      saveCfg({
-        positionMode: selMode.value,
-        corner: selCorner.value,
-        snap: chkSnap.checked,
-        scale: parseFloat(rngScale.value),
-        opacity: parseFloat(rngOpacity.value),
-        autoMinimize: chkAutoMin.checked,
-        autoMinimizeMs: parseInt(numAutoMs.value, 10),
-        showOnMobile: chkMob.checked,
-        showOnDesktop: chkDesk.checked,
-        perSiteOverride: chkPerSite.checked,
-      });
-      applyCfg(container);
-      wrap.remove();
-    };
-    btnReset.onclick = () => {
-      const all = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
-      delete all[HOST]; delete all._global;
-      localStorage.setItem(CFG_KEY, JSON.stringify(all));
-      applyCfg(container);
-      wrap.remove();
-    };
-  }
-
-  // ----------- Drag (Pointer Events) -----------
-  function enableDrag(container, applyCfg) {
-    let dragging = false, sx = 0, sy = 0, sl = 0, st = 0;
+  // ---------- Drag (handle-limited, Alt=anywhere) ----------
+  function enableDrag(container, handle) {
+    let dragging = false, sx=0, sy=0, ox=0, oy=0;
 
     const onDown = (e) => {
       if (e.button !== undefined && e.button !== 0 && e.pointerType !== 'touch') return;
       dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      ox = cfg.offsetX; oy = cfg.offsetY;
       container.setPointerCapture?.(e.pointerId);
-      const rect = container.getBoundingClientRect();
-      sx = e.clientX; sy = e.clientY; sl = rect.left; st = rect.top;
       e.preventDefault();
     };
     const onMove = (e) => {
       if (!dragging) return;
-      const cfg = loadCfg();
-      if (cfg.positionMode !== 'free') return;
-
-      const padL = 0, padT = 0, padR = 0, padB = 0; // safe-areaは初期化済みCSSで確保
-      const left = clamp(sl + (e.clientX - sx), padL, vw() - container.offsetWidth - padR);
-      const top = clamp(st + (e.clientY - sy), padT, vh() - container.offsetHeight - padB);
-      container.style.left = `${left}px`;
-      container.style.top = `${top}px`;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      const baseSnap = Math.max(4, Math.min(24, cfg.snap));
+      let nx = snap(clamp(ox + (cfg.corner.includes('l') ? dx : -dx), 0, 0x7fffffff), baseSnap);
+      let ny = snap(clamp(oy + (cfg.corner.includes('t') ? dy : -dy), 0, 0x7fffffff), baseSnap);
+      cfg.offsetX = nx; cfg.offsetY = ny;
+      applyCornerPos();
     };
-    const onUp = () => {
+    const onUp = (e) => {
       if (!dragging) return;
       dragging = false;
-      const rect = container.getBoundingClientRect();
-      savePos(rect.left, rect.top);
-
-      const cfg = loadCfg();
-      if (cfg.positionMode === 'free' && cfg.snap) {
-        const toLeft = rect.left < (vw() / 2 - rect.width / 2);
-        const toTop = rect.top < (vh() / 2 - rect.height / 2);
-        container.style.left = `${toLeft ? 12 : vw() - rect.width - 12}px`;
-        container.style.top = `${toTop ? 12 : vh() - rect.height - 12}px`;
-        const r2 = container.getBoundingClientRect();
-        savePos(r2.left, r2.top);
-      }
+      container.releasePointerCapture?.(e.pointerId);
+      savePos(cfg, { corner: cfg.corner, offsetX: cfg.offsetX, offsetY: cfg.offsetY });
+      saveCfg(cfg);
     };
 
-    container.addEventListener('pointerdown', onDown);
-    window.addEventListener('pointermove', onMove, { passive: true });
-    window.addEventListener('pointerup', onUp, { passive: true });
+    // ハンドル限定
+    handle.addEventListener('pointerdown', onDown);
+    shadow.addEventListener('pointermove', onMove);
+    shadow.addEventListener('pointerup', onUp);
+    shadow.addEventListener('pointercancel', onUp);
 
-    const clampIntoView = () => {
-      const rect = container.getBoundingClientRect();
-      const left = clamp(rect.left, 0, vw() - rect.width);
-      const top = clamp(rect.top, 0, vh() - rect.height);
-      container.style.left = `${left}px`;
-      container.style.top = `${top}px`;
-      savePos(left, top);
-    };
-    window.addEventListener('resize', clampIntoView);
-    window.visualViewport?.addEventListener('resize', clampIntoView, { passive: true });
+    // Alt押下中はコンテナ全域でドラッグ許可
+    container.addEventListener('pointerdown', (e) => {
+      if (!e.altKey) return;
+      onDown(e);
+    });
   }
 
-  // ----------- Apply Settings / Initial Position -----------
-  function applyCfg(container) {
-    const cfg = loadCfg();
-    const mobile = isMobile();
-    if ((mobile && !cfg.showOnMobile) || (!mobile && !cfg.showOnDesktop)) {
-      container.style.display = 'none';
-      return;
+  enableDrag(wrap, dragbar);
+
+  // ダブルクリックで最小化切替
+  dragbar.addEventListener('dblclick', () => applyMinified(!cfg.minified));
+
+  miniBtn.addEventListener('click', () => applyMinified(false));
+
+  // ---------- Actions ----------
+  function buildPrompt(tpl) {
+    let sel = getSelectionText(cfg.selectionMaxChars).trim();
+    if (!sel) {
+      // 選択がない場合はページ概要を差し込む
+      sel = `【ページ情報】\nタイトル: ${document.title}\nURL: ${location.href}\n本文の一部: ${(document.body?.innerText || '').trim().slice(0, 800)}\n...`;
+    }
+    return tpl.replace(/\{SELECTION\}/g, sel);
+  }
+
+  function runAction(kind) {
+    const tpl = (kind === 'summary') ? cfg.templates.summary : cfg.templates.explain;
+    const prompt = buildPrompt(tpl);
+    const ok = copyToClipboard(prompt);
+    if (ok) {
+      showToast('プロンプトをクリップボードへコピーしました ✅', 'success');
+      if (cfg.openChatGPT) openChatGPTTab();
     } else {
-      container.style.display = 'flex';
-    }
-
-    container.style.transform = `scale(${cfg.scale})`;
-    container.style.opacity = `${cfg.opacity}`;
-
-    const saved = loadPos();
-    if (cfg.positionMode === 'corner' || !saved) {
-      const pad = 12;
-      const map = {
-        bl: () => ({ left: pad, top: vh() - container.offsetHeight - pad }),
-        br: () => ({ left: vw() - container.offsetWidth - pad, top: vh() - container.offsetHeight - pad }),
-        tl: () => ({ left: pad, top: pad }),
-        tr: () => ({ left: vw() - container.offsetWidth - pad, top: pad }),
-      };
-      const pos = (map[cfg.corner] || map.bl)();
-      container.style.left = `${pos.left}px`;
-      container.style.top = `${pos.top}px`;
-      savePos(pos.left, pos.top);
-    } else {
-      const left = clamp(saved.left, 0, vw() - container.offsetWidth);
-      const top = clamp(saved.top, 0, vh() - container.offsetHeight);
-      container.style.left = `${left}px`;
-      container.style.top = `${top}px`;
-    }
-
-    if (cfg.autoMinimize) {
-      let t;
-      const arm = () => {
-        clearTimeout(t);
-        t = setTimeout(() => {
-          container.style.opacity = `${Math.min(cfg.opacity, 0.5)}`;
-          container.style.transform = `scale(${cfg.scale * 0.9})`;
-        }, cfg.autoMinimizeMs);
-      };
-      const disarm = () => {
-        clearTimeout(t);
-        container.style.opacity = `${cfg.opacity}`;
-        container.style.transform = `scale(${cfg.scale})`;
-        arm();
-      };
-      ['pointerenter', 'pointerleave', 'pointerdown', 'pointerup', 'touchstart', 'mousemove', 'scroll', 'keydown'].forEach(ev => {
-        window.addEventListener(ev, disarm, { passive: true });
-      });
-      arm();
+      showToast('コピーに失敗… テキストを選択して Ctrl+C / ⌘C を試してね', 'warn', 3200);
     }
   }
 
-  // ----------- Launcher UI -----------
-  const container = document.createElement('div');
-  container.id = 'chatgpt-ui-launcher';
-  container.style.left = `calc(20px + var(--safe-left))`;
-  container.style.bottom = `calc(20px + var(--safe-bottom))`; // will be overridden by applyCfg (top/left)
-  container.style.position = 'fixed';
-  container.style.zIndex = String(Z_TOP);
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.gap = '6px';
+  btnSum.addEventListener('click', (e) => { e.preventDefault(); runAction('summary'); });
+  btnExp.addEventListener('click', (e) => { e.preventDefault(); runAction('explain'); });
 
-  const dragbar = document.createElement('div');
-  dragbar.className = 'cgpt-dragbar';
-  container.appendChild(dragbar);
+  // ---------- Settings Modal ----------
+  let modalBackdrop = null;
 
-  const gear = document.createElement('button');
-  gear.className = 'chatgpt-gear';
-  gear.title = '設定';
-  gear.textContent = '⚙️';
-  gear.onclick = () => showSettings(container, applyCfg);
-  container.appendChild(gear);
+  function openSettings() {
+    if (modalBackdrop) return;
+    modalBackdrop = el('div', { className: 'modal-backdrop', role: 'dialog', ariaModal: 'true' });
+    const modal = el('div', { className: 'modal' });
+    const header = el('header');
+    const h2 = el('h2', { textContent: '設定' });
+    const xbtn = el('button', { className: 'xbtn', innerHTML: '✕', 'aria-label': '閉じる' });
 
-  const btnSummary = document.createElement('button');
-  btnSummary.textContent = ' 📘要約';
-  btnSummary.className = 'chatgpt-btn';
-  btnSummary.onclick = (e) => {
-    const promptText = buildContextualPrompt(
-`Please analyze:
-Title: {TITLE}
-URL: {URL}
-{SELECTION}
-Summarize the key points in Japanese using headers and bullet points.`);
-    handleAction(promptText, e.currentTarget);
-  };
+    // --- fields
+    const form = el('div', { className: 'form' });
 
-  const btnExplain = document.createElement('button');
-  btnExplain.textContent = ' 🔍️解説';
-  btnExplain.className = 'chatgpt-btn';
-  btnExplain.onclick = (e) => {
-    const promptText = buildContextualPrompt(
-`Please analyze:
-Title: {TITLE}
-URL: {URL}
-{SELECTION}
-1) Explain key concepts in simple Japanese.
-2) Provide a table of contents.
-3) Ask which topic to dive deeper.
-4) After user chooses, provide a deep explanation.`);
-    handleAction(promptText, e.currentTarget);
-  };
+    // 角
+    const fCorner = el('div', { className: 'field' });
+    const lbCorner = el('label', { textContent: '表示位置（角）' });
+    const selCorner = el('select');
+    selCorner.innerHTML = `
+      <option value="bl">左下</option>
+      <option value="br">右下</option>
+      <option value="tl">左上</option>
+      <option value="tr">右上</option>
+    `;
+    selCorner.value = cfg.corner;
+    fCorner.append(lbCorner, selCorner);
 
-  container.appendChild(btnSummary);
-  container.appendChild(btnExplain);
-  document.body.appendChild(container);
+    // オフセット
+    const fOffset = el('div', { className: 'field' });
+    const lbOffset = el('label', { textContent: '余白（px）' });
+    const rowOffset = el('div', { className: 'row' });
+    const inX = el('input', { type: 'number', value: cfg.offsetX, min: 0 });
+    const inY = el('input', { type: 'number', value: cfg.offsetY, min: 0 });
+    inX.placeholder = 'X'; inY.placeholder = 'Y';
+    rowOffset.append(inX, inY);
+    fOffset.append(lbOffset, rowOffset);
 
-  // Initialize position/appearance & enable drag
-  // Switch from bottom-based to top-based placement
-  container.style.bottom = '';
-  applyCfg(container);
+    // サイト別保存
+    const fSite = el('div', { className: 'field' });
+    const lbSite = el('label', { textContent: '位置をサイト別に保存' });
+    const cbSite = el('input', { type: 'checkbox', checked: cfg.perSiteOverride });
+    fSite.append(lbSite, cbSite);
 
-  // Dragging: handle starts on dragbar, or Alt+drag anywhere in container
-  dragbar.addEventListener('pointerdown', (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    // Temporarily switch to free mode while dragging? Keep user setting.
-  });
-  enableDrag(container, applyCfg);
-  container.addEventListener('pointerdown', (e) => { if (e.altKey) e.target === container && e.preventDefault(); });
+    // ChatGPT上の表示
+    const fHide = el('div', { className: 'field' });
+    const lbHide = el('label', { textContent: 'ChatGPTサイトでは非表示' });
+    const cbHide = el('input', { type: 'checkbox', checked: cfg.hideOnChatGPT });
+    fHide.append(lbHide, cbHide);
 
-  // ----------- Hotkeys -----------
-  // Alt+Shift+S/E: open summary/explain; Alt+Shift+G: minimize toggle
-  let minimized = false;
-  function toggleMini() {
-    minimized = !minimized;
-    container.style.transform = minimized ? 'scale(0.85)' : `scale(${loadCfg().scale})`;
-    container.style.opacity = minimized ? '0.35' : `${loadCfg().opacity}`;
+    // 開く/コピー
+    const fOpen = el('div', { className: 'field' });
+    const lbOpen = el('label', { textContent: 'コピー後にChatGPTを開く' });
+    const cbOpen = el('input', { type: 'checkbox', checked: cfg.openChatGPT });
+    fOpen.append(lbOpen, cbOpen);
+
+    // 選択上限
+    const fLen = el('div', { className: 'field' });
+    const lbLen = el('label', { textContent: '選択テキスト上限（文字）' });
+    const inLen = el('input', { type: 'number', value: cfg.selectionMaxChars, min: 200, step: 100 });
+    fLen.append(lbLen, inLen);
+
+    // テンプレ
+    const fTplSum = el('div', { className: 'field' });
+    const lbTplSum = el('label', { textContent: 'テンプレ：要約' });
+    const taSum = el('textarea', { value: cfg.templates.summary });
+    fTplSum.append(lbTplSum, taSum);
+
+    const fTplExp = el('div', { className: 'field' });
+    const lbTplExp = el('label', { textContent: 'テンプレ：解説' });
+    const taExp = el('textarea', { value: cfg.templates.explain });
+    fTplExp.append(lbTplExp, taExp);
+
+    // ボタン
+    const actions = el('div', { className: 'actions' });
+    const btnReset = el('button', { className: 'btn', textContent: '既定に戻す' });
+    const btnSave = el('button', { className: 'btn', textContent: '保存' });
+
+    actions.append(btnReset, btnSave);
+
+    form.append(fCorner, fOffset, fSite, fHide, fOpen, fLen, fTplSum, fTplExp, actions);
+    header.append(h2, xbtn);
+    modal.append(header, form);
+    modalBackdrop.append(modal);
+    shadow.appendChild(modalBackdrop);
+
+    function close() {
+      modalBackdrop?.remove();
+      modalBackdrop = null;
+      dragbar.focus();
+    }
+
+    xbtn.addEventListener('click', close);
+    modalBackdrop.addEventListener('click', (e) => { if (e.target === modalBackdrop) close(); });
+    document.addEventListener('keydown', escClose, { capture: true });
+    function escClose(e) { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); document.removeEventListener('keydown', escClose, { capture: true }); } }
+
+    btnReset.addEventListener('click', () => {
+      cfg = structuredClone(defaultCfg);
+      selCorner.value = cfg.corner;
+      inX.value = cfg.offsetX; inY.value = cfg.offsetY;
+      cbSite.checked = cfg.perSiteOverride;
+      cbHide.checked = cfg.hideOnChatGPT;
+      cbOpen.checked = cfg.openChatGPT;
+      inLen.value = cfg.selectionMaxChars;
+      taSum.value = cfg.templates.summary;
+      taExp.value = cfg.templates.explain;
+      saveCfg(cfg);
+      applyCornerPos();
+      showToast('設定を既定に戻しました', 'success');
+    });
+
+    btnSave.addEventListener('click', () => {
+      cfg.corner = selCorner.value;
+      cfg.offsetX = clamp(Number(inX.value) || 0, 0, 9999);
+      cfg.offsetY = clamp(Number(inY.value) || 0, 0, 9999);
+      cfg.perSiteOverride = !!cbSite.checked;
+      cfg.hideOnChatGPT = !!cbHide.checked;
+      cfg.openChatGPT = !!cbOpen.checked;
+      cfg.selectionMaxChars = clamp(parseInt(inLen.value, 10) || defaultCfg.selectionMaxChars, 200, 20000);
+      cfg.templates.summary = taSum.value || defaultCfg.templates.summary;
+      cfg.templates.explain = taExp.value || defaultCfg.templates.explain;
+
+      saveCfg(cfg);
+      savePos(cfg, { corner: cfg.corner, offsetX: cfg.offsetX, offsetY: cfg.offsetY });
+      applyCornerPos();
+      showToast('設定を保存しました', 'success');
+      // ChatGPT上の非表示切替は次回読込で反映
+    });
   }
-  window.addEventListener('keydown', (e) => {
-    if (!e.altKey || !e.shiftKey || e.repeat) return;
-    const k = e.key.toLowerCase();
-    if (k === 's') { btnSummary.click(); }
-    if (k === 'e') { btnExplain.click(); }
-    if (k === 'g') { toggleMini(); }
+
+  gear.addEventListener('click', (e) => { e.preventDefault(); openSettings(); });
+
+  // ---------- Hotkeys ----------
+  document.addEventListener('keydown', (e) => {
+    // 例: Alt+Shift+S/E で要約/解説、Alt+Shift+M で最小化
+    if (e.altKey && e.shiftKey && !e.repeat) {
+      if (e.code === 'KeyS') { e.preventDefault(); runAction('summary'); }
+      else if (e.code === 'KeyE') { e.preventDefault(); runAction('explain'); }
+      else if (e.code === 'KeyM') { e.preventDefault(); applyMinified(!cfg.minified); }
+    }
+  }, { capture: true });
+
+  // ---------- Init position ----------
+  // 既存保存がなければ角の自動回避を走らせる
+  if (!loadPos(cfg)) {
+    cfg.corner = chooseInitialCorner(cfg.corner);
+    saveCfg(cfg);
+  } else {
+    const saved = loadPos(cfg);
+    if (saved) {
+      cfg.corner = saved.corner || cfg.corner;
+      cfg.offsetX = typeof saved.offsetX === 'number' ? saved.offsetX : cfg.offsetX;
+      cfg.offsetY = typeof saved.offsetY === 'number' ? saved.offsetY : cfg.offsetY;
+    }
+  }
+
+  // 初期表示
+  applyCornerPos();
+  applyMinified(!!cfg.minified);
+
+  // リサイズ時も再適用（セーフエリアの変化へ追従）
+  window.addEventListener('resize', () => {
+    applyCornerPos();
   });
 
 })();
