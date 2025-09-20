@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT-Prompt-UI-Launcher
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      0.9.0
+// @version      0.9.1
 // @description  オーバーレイ＆ESC＆フォールバック実装。選択テキスト/ダークテーマ/高z-index対応🎀
 // @author       junx913x
 // @match        *://*/*
