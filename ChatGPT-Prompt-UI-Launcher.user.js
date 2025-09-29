@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.2.1
+// @version      1.2.2
 // @description  ChatGPTランチャー（要約/解説、ドラッグ移動＆コーナー吸着、折りたたみ、サイト別表示ON/OFF、クリップボード対応、safe-area・z-index最適化）
 // @author       scarecrowx913x
 // @match        *://*/*
