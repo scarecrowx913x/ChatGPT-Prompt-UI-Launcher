@@ -3,7 +3,7 @@
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
 // @version      1.2.1
 // @description  ChatGPTランチャー（要約/解説、ドラッグ移動＆コーナー吸着、折りたたみ、サイト別表示ON/OFF、クリップボード対応、safe-area・z-index最適化）
-// @author       junx913x
+// @author       scarecrowx913x
 // @match        *://*/*
 // @exclude      *://chatgpt.com/*
 // @exclude      *://chat.openai.com/*
