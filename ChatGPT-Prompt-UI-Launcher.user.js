@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.4.0
-// @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信ブリッジ。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、クリップボード、safe-area・z-index最適化、DOM差し替え自動復帰。
+// @version      1.5.0
+// @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信ブリッジ。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、クリップボード、safe-area・z-index最適化、DOM差し替え自動復帰、キュー式フォールバック、貼付自己修復。
 // @author       scarecrowx913x
 // @match        *://*/*
 // @match        https://chatgpt.com/*
@@ -20,10 +20,15 @@
   'use strict';
   if (window.top !== window.self) return;
 
+  // 二重注入ガード
+  if (window.__cgpt_ui_launcher_active__) return;
+  window.__cgpt_ui_launcher_active__ = true;
+
   // =============================
   // RouteB Bridge（外部→ChatGPTへ自動入力／自動送信）
   // =============================
   const BRIDGE_PREFIX = 'cgpt_launcher_payload_';
+  const QUEUE_KEY     = 'cgpt_launcher_queue_v1';
   const AUTOSEND_KEY  = 'cgpt_launcher_autosend_v1';
   const DEFAULT_AUTOSEND = false;
 
@@ -46,6 +51,15 @@
   function setAutoSend(v) { try { GM_setValue(AUTOSEND_KEY, !!v); } catch {} }
   function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+  // ---- Queue（ハッシュ消失時のフォールバック） ----
+  async function queueRead(){ return (await gmGet(QUEUE_KEY, [])) || []; }
+  async function queueWrite(a){ await gmSet(QUEUE_KEY, a); }
+  async function queuePush(tok){ const q=await queueRead(); q.push(tok); await queueWrite(q); }
+  async function queueRemove(tok){
+    const q=await queueRead(); const i=q.indexOf(tok); if(i>=0){ q.splice(i,1); await queueWrite(q); }
+  }
+
+  // ---- URLハッシュ ----
   function getHashParam(name){
     const h = new URL(location.href).hash.replace(/^#/, '');
     if (!h) return null;
@@ -60,11 +74,15 @@
     history.replaceState(null, '', url.toString());
   }
 
+  // ---- 入力欄検出（強化） ----
   function findPromptInput() {
     const sels = [
       'textarea[data-testid="prompt-textarea"]',
-      'form textarea',
-      'textarea[placeholder]',
+      'form textarea:not([disabled])',
+      'textarea[placeholder]:not([disabled])',
+      'div[contenteditable="true"][data-lexical-editor]',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"][data-placeholder]',
       'div[contenteditable="true"]'
     ];
     for (const sel of sels) {
@@ -111,6 +129,14 @@
     try { el.textContent = val; } catch {}
   }
 
+  function verifyFilled(el, text) {
+    const t = String(text).slice(0, 12);
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      return (el.value || '').slice(0, 12) === t;
+    }
+    return (el.textContent || '').slice(0, 12) === t;
+  }
+
   async function clickSendButton() {
     const sels = [
       'button[aria-label*="送信"]',
@@ -138,25 +164,42 @@
     } catch {}
   }
 
+  // ---- 自己修復リトライつき適用 ----
   async function applyPromptToChatGPTUI(text, { autoSend }) {
-    let inputEl = null;
-    for (let i = 0; i < 300; i++) { // 最大30秒待機
+    const deadline = Date.now() + 30000; // 最大30秒
+    let inputEl = null, ok = false;
+
+    while (Date.now() < deadline) {
       inputEl = findPromptInput();
-      if (inputEl) break;
-      await sleep(100);
+      if (inputEl) {
+        await fillInput(inputEl, String(text));
+        ok = verifyFilled(inputEl, text);
+        if (ok) break;
+      }
+      await sleep(300);
     }
-    if (!inputEl) return;
-    await fillInput(inputEl, String(text));
+    if (!ok || !inputEl) return;
+
     if (autoSend) {
       const sent = await clickSendButton();
       if (!sent) tryEnter(inputEl);
     }
   }
 
+  // ---- 受信（ハッシュ or キュー） ----
   async function receiveAndApplyPromptIfAny() {
     if (!/chatgpt\.com$/i.test(location.hostname)) return;
-    const token = getHashParam('launcher');
-    if (!token) return;
+
+    let token = getHashParam('launcher');
+    if (!token) {
+      const q = await queueRead();
+      for (const t of q) {
+        const exists = await gmGet(BRIDGE_PREFIX + t, null);
+        if (exists) { token = t; break; }
+      }
+      if (!token) return; // 何も待機してない
+    }
+
     const key = BRIDGE_PREFIX + token;
     const payloadStr = await gmGet(key, null);
     if (!payloadStr) return;
@@ -169,7 +212,8 @@
       applied = true;
     } finally {
       if (applied) {
-        await gmDel(key);                  // ✅ 成功後に削除
+        await gmDel(key);
+        await queueRemove(token);
         setHashParam('launcher_applied', '1');
       }
     }
@@ -203,6 +247,7 @@
       ts: Date.now()
     };
     gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
+    queuePush(token); // ✅ キューに積む（リダイレクト・ログイン対策）
     const target = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
     try { GM_openInTab(target, { active: true, insert: true }); }
     catch { window.open(target, '_blank', 'noopener'); }
@@ -251,6 +296,11 @@
       setAutoSend(!now);
       showToast(`自動送信を ${!now ? 'ON' : 'OFF'} にしました`, 1800);
     });
+    GM_registerMenuCommand('キャッシュ無視で再読込', () => {
+      const u = new URL(location.href);
+      u.searchParams.set('_cb', Date.now());
+      location.href = u.toString();
+    });
   }
   if (!enabled(host)) return;
 
@@ -274,13 +324,6 @@
         user-select:none;touch-action:none
       }
       .chatgpt-gear.dragging{cursor:grabbing}
-      .cgpt-modal-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);z-index:2147483647}
-      .cgpt-modal{position:relative;background:#fff;color:#111;padding:16px;border-radius:10px;text-align:center;width:min(92vw,340px);max-width:92vw;box-shadow:0 8px 24px rgba(0,0,0,.3);font-size:14px}
-      .cgpt-modal-close{position:absolute;top:8px;right:8px;background:transparent;border:none;color:#666;font-size:18px;cursor:pointer;line-height:1}
-      .cgpt-modal-close:hover{color:#000}
-      .cgpt-modal-btn{margin:10px 6px 0;padding:8px 12px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;min-height:34px}
-      .cgpt-modal-btn.open{background:#10a37f;color:#fff}
-      .cgpt-modal-btn.copy{background:#eee;color:#333}
       .cgpt-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(17,17,17,.92);color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;z-index:2147483647;box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .2s ease}
       .cgpt-toast.show{opacity:1}
       .cgpt-pop{position:fixed;z-index:2147483647;background:#fff;color:#111;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:8px;min-width:180px;font-size:13px}
@@ -297,6 +340,9 @@
     state.__initialized_v122_toggle = true;
     saveState();
   }
+
+  // 旧ランチャーDOMの事前掃除（残存UIを一掃）
+  try { document.querySelectorAll('#chatgpt-ui-launcher').forEach(n => n.remove()); } catch {}
 
   // ---------- UI ----------
   const container = document.createElement('div');
@@ -512,7 +558,7 @@
     document.body.appendChild(pop);
 
     const {vw, vh} = viewport();
-    const rectW = 240, rectH = 190;
+    const rectW = 240, rectH = 200;
     pop.style.left = Math.min(vw - rectW - 8, Math.max(8, x - 20)) + 'px';
     pop.style.top  = Math.min(vh - rectH - 8, Math.max(8, y + 8)) + 'px';
 
