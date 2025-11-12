@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.0
+// @version      1.6.1
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -340,6 +340,7 @@
   }
   if (!enabled(host)) return;
 
+  // Style (once)
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -368,14 +369,16 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
+  // 旧ランチャーDOMの事前掃除（残存UIを一掃）
+  try { document.querySelectorAll('#chatgpt-ui-launcher').forEach(n => n.remove()); } catch {}
+
+  // ---------- UI ----------
   const state = loadJSON(STATE_KEY, { mode:'corner', corner:'bottom-left', x:24, y:24, collapsed:true });
   if (state.__initialized_v122_toggle !== true) {
     state.collapsed = true;
     state.__initialized_v122_toggle = true;
     saveState();
   }
-
-  try { document.querySelectorAll('#chatgpt-ui-launcher').forEach(n => n.remove()); } catch {}
 
   const container = document.createElement('div');
   container.id = 'chatgpt-ui-launcher';
@@ -430,15 +433,15 @@
   applyCollapsed(state.collapsed);
   applyPositionFromState();
 
+  // DOM差し替えで消える場合の自動復帰
   new MutationObserver(() => {
     if (!document.getElementById('chatgpt-ui-launcher')) {
       document.body.appendChild(container);
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
 
-  // ---- Drag / Long-press ----
+  // ---------- Drag / Long-press / Click ----------
   let pressTimer=null, longPressed=false, dragging=false, startX=0, startY=0, startLeft=0, startTop=0, pointerId=null;
-  const LONGPRESS_MS = 600, DRAG_THRESHOLD_PX = 6, SNAP_RADIUS_PX = 64;
   const captureOpts = { capture: true };
 
   btnGear.addEventListener('pointerdown', (e) => {
@@ -509,6 +512,7 @@
     dragging = false; longPressed = false; pointerId = null;
   }
 
+  // ---------- Collapse / Position ----------
   function applyCollapsed(collapsed){
     btnNormal.style.display = collapsed ? 'none' : '';
     btnForce.style.display  = collapsed ? 'none'  : '';
@@ -581,6 +585,7 @@
   }
   function clamp(v, a, b){ return Math.min(b, Math.max(a, v)); }
 
+  // ---------- Long-press menu ----------
   function openMenuAt(x, y) {
     closePopups();
     const pop = document.createElement('div');
@@ -641,6 +646,7 @@
   }
   function closePopups(){ document.querySelectorAll('.cgpt-pop').forEach(n=>n.remove()); }
 
+  // ---------- Prompt Builders ----------
   function getPageTextSnippet(limit = 3500) {
     try {
       let t = (document.body && document.body.innerText) ? document.body.innerText : '';
@@ -674,6 +680,7 @@ If you can also directly access the URL with your browsing tools, you may use it
 Summarize the key points in Japanese using clear headers and bullet points.`;
   }
 
+  // ---------- Utils ----------
   function showToast(message, ms = 1500) {
     const toast = document.createElement('div');
     toast.className = 'cgpt-toast';
