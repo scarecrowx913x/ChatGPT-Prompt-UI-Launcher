@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.1
+// @version      1.6.2
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -340,7 +340,7 @@
   }
   if (!enabled(host)) return;
 
-  // Style (once)
+  // ---- Style (once) ----
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -350,26 +350,38 @@
         padding:6px 10px;border-radius:6px;cursor:pointer;
         font-size:clamp(11px,2vw,13px);font-weight:700;
         min-height:32px;line-height:1.1;user-select:none;
-        box-shadow:0 1px 5px rgba(0,0,0,.18);touch-action:manipulation
+        box-shadow:0 1px 5px rgba(0,0,0,.18);touch-action:manipulation;
       }
-      .chatgpt-btn:hover{background-color:#0e8f70}
+      .chatgpt-btn:hover{background-color:#0e8f70;}
       .chatgpt-gear{
         background:transparent;border:none;color:inherit;width:28px;height:28px;
         display:flex;align-items:center;justify-content:center;
         font-size:20px;cursor:grab;line-height:1;padding:0;box-shadow:none;
-        user-select:none;touch-action:none
+        user-select:none;touch-action:none;
       }
-      .chatgpt-gear.dragging{cursor:grabbing}
-      .cgpt-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(17,17,17,.92);color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;z-index:2147483647;box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .2s ease}
-      .cgpt-toast.show{opacity:1}
-      .cgpt-pop{position:fixed;z-index:2147483647;background:#fff;color:#111;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:8px;min-width:180px;font-size:13px}
-      .cgpt-pop button{display:block;width:100%;text-align:left;background:#f6f6f6;border:none;border-radius:6px;padding:8px 10px;margin:4px 0;cursor:pointer}
-      .cgpt-pop button:hover{background:#e9e9e9}
+      .chatgpt-gear.dragging{cursor:grabbing;}
+      .cgpt-toast{
+        position:fixed;left:50%;transform:translateX(-50%);
+        bottom:calc(12px + env(safe-area-inset-bottom));
+        background:rgba(17,17,17,.92);color:#fff;padding:8px 12px;border-radius:8px;
+        font-size:12px;z-index:2147483647;box-shadow:0 6px 20px rgba(0,0,0,.35);
+        pointer-events:none;opacity:0;transition:opacity .2s ease;
+      }
+      .cgpt-toast.show{opacity:1;}
+      .cgpt-pop{
+        position:fixed;z-index:2147483647;background:#fff;color:#111;border:1px solid #ddd;
+        border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:8px;min-width:180px;font-size:13px;
+      }
+      .cgpt-pop button{
+        display:block;width:100%;text-align:left;background:#f6f6f6;border:none;border-radius:6px;
+        padding:8px 10px;margin:4px 0;cursor:pointer;
+      }
+      .cgpt-pop button:hover{background:#e9e9e9;}
     `;
     (document.head || document.documentElement).appendChild(style);
   }
 
-  // 旧ランチャーDOMの事前掃除（残存UIを一掃）
+  // 旧ランチャーDOMの掃除
   try { document.querySelectorAll('#chatgpt-ui-launcher').forEach(n => n.remove()); } catch {}
 
   // ---------- UI ----------
@@ -597,6 +609,8 @@
     pop.style.left = Math.min(vw - rectW - 8, Math.max(8, x - 20)) + 'px';
     pop.style.top  = Math.min(vh - rectH - 8, Math.max(8, y + 8)) + 'px';
 
+    const enabledNow = enabled(host);
+
     const b1 = document.createElement('button');
     b1.textContent = '四隅に吸着（順送り）';
     b1.addEventListener('click', () => {
@@ -609,7 +623,6 @@
       closePopups();
     });
 
-    const enabledNow = enabled(host);
     const b2 = document.createElement('button');
     b2.textContent = enabledNow ? 'このサイトで非表示にする' : 'このサイトで表示する';
     b2.addEventListener('click', () => {
