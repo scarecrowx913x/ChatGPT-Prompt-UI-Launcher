@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB Bridge)
+// @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.5.0
-// @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信ブリッジ。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、クリップボード、safe-area・z-index最適化、DOM差し替え自動復帰、キュー式フォールバック、貼付自己修復。
+// @version      1.6.0
+// @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
 // @match        https://chatgpt.com/*
@@ -20,19 +20,19 @@
   'use strict';
   if (window.top !== window.self) return;
 
-  // 二重注入ガード
+  // ===== Double-injection guard =====
   if (window.__cgpt_ui_launcher_active__) return;
   window.__cgpt_ui_launcher_active__ = true;
 
   // =============================
-  // RouteB Bridge（外部→ChatGPTへ自動入力／自動送信）
+  // Bridges & Storage
   // =============================
   const BRIDGE_PREFIX = 'cgpt_launcher_payload_';
   const QUEUE_KEY     = 'cgpt_launcher_queue_v1';
   const AUTOSEND_KEY  = 'cgpt_launcher_autosend_v1';
   const DEFAULT_AUTOSEND = false;
 
-  // ---- GM wrappers（TM/VM両対応） ----
+  // ---- GM wrappers ----
   async function gmGet(key, def = null) {
     try {
       const v = (typeof GM_getValue === 'function') ? GM_getValue(key, def) : def;
@@ -51,7 +51,7 @@
   function setAutoSend(v) { try { GM_setValue(AUTOSEND_KEY, !!v); } catch {} }
   function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
-  // ---- Queue（ハッシュ消失時のフォールバック） ----
+  // ---- Queue (for Route-B fallback / login redirects) ----
   async function queueRead(){ return (await gmGet(QUEUE_KEY, [])) || []; }
   async function queueWrite(a){ await gmSet(QUEUE_KEY, a); }
   async function queuePush(tok){ const q=await queueRead(); q.push(tok); await queueWrite(q); }
@@ -59,7 +59,7 @@
     const q=await queueRead(); const i=q.indexOf(tok); if(i>=0){ q.splice(i,1); await queueWrite(q); }
   }
 
-  // ---- URLハッシュ ----
+  // ---- URL hash helpers ----
   function getHashParam(name){
     const h = new URL(location.href).hash.replace(/^#/, '');
     if (!h) return null;
@@ -74,7 +74,53 @@
     history.replaceState(null, '', url.toString());
   }
 
-  // ---- 入力欄検出（強化） ----
+  // =============================
+  // Sender: Route-C (window.name) → Route-B fallback
+  // =============================
+  function encodePayload(obj){
+    // safe b64 for unicode
+    const s = JSON.stringify(obj);
+    return btoa(unescape(encodeURIComponent(s)));
+  }
+  function decodePayload(b64){
+    const s = decodeURIComponent(escape(atob(b64)));
+    return JSON.parse(s);
+  }
+
+  function sendPromptToChatGPT(prompt, opts = {}) {
+    const autoSend = (opts.autoSend !== undefined) ? !!opts.autoSend : getAutoSend();
+    const content = (prompt || '').toString();
+    const MAX_LEN = 12000; // overall safety
+    const payload = {
+      prompt: content.length > MAX_LEN ? content.slice(0, MAX_LEN) + '\n\n[...truncated...]' : content,
+      autoSend,
+      from: location.href,
+      ts: Date.now()
+    };
+
+    // --- Route-C: window.name bridge (preferred; robust on mobile) ---
+    try {
+      const w = window.open('about:blank', '_blank'); // no noopener here (we need to set name)
+      if (w) {
+        w.name = 'CGPTL|' + encodePayload(payload);   // persist across cross-origin nav
+        try { w.opener = null; } catch {}
+        w.location.href = 'https://chatgpt.com/#from=wn';
+        return;
+      }
+    } catch {}
+
+    // --- Route-B: GM storage + #token fallback ---
+    const token = genToken();
+    gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
+    queuePush(token);
+    const target = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
+    try { GM_openInTab(target, { active: true, insert: true }); }
+    catch { window.open(target, '_blank', 'noopener'); }
+  }
+
+  // =============================
+  // Receiver on chatgpt.com
+  // =============================
   function findPromptInput() {
     const sels = [
       'textarea[data-testid="prompt-textarea"]',
@@ -145,7 +191,7 @@
       'button[type="submit"]',
       'form button:not([disabled])'
     ];
-    for (let i = 0; i < 200; i++) { // 20秒まで待機
+    for (let i = 0; i < 200; i++) { // up to 20s
       for (const sel of sels) {
         const btn = document.querySelector(sel);
         if (btn && !btn.disabled && btn.offsetParent !== null) {
@@ -164,9 +210,8 @@
     } catch {}
   }
 
-  // ---- 自己修復リトライつき適用 ----
   async function applyPromptToChatGPTUI(text, { autoSend }) {
-    const deadline = Date.now() + 30000; // 最大30秒
+    const deadline = Date.now() + 30000; // up to 30s
     let inputEl = null, ok = false;
 
     while (Date.now() < deadline) {
@@ -186,10 +231,24 @@
     }
   }
 
-  // ---- 受信（ハッシュ or キュー） ----
   async function receiveAndApplyPromptIfAny() {
     if (!/chatgpt\.com$/i.test(location.hostname)) return;
 
+    // ---- Route-C: window.name first ----
+    try {
+      if (typeof window.name === 'string' && window.name.startsWith('CGPTL|')) {
+        const b64 = window.name.slice(6);
+        const payload = decodePayload(b64);
+        window.name = ''; // clear
+        if (payload && payload.prompt) {
+          await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
+          setHashParam('launcher_applied', '1');
+          return;
+        }
+      }
+    } catch {}
+
+    // ---- Route-B: GM storage + #token / queue ----
     let token = getHashParam('launcher');
     if (!token) {
       const q = await queueRead();
@@ -197,7 +256,7 @@
         const exists = await gmGet(BRIDGE_PREFIX + t, null);
         if (exists) { token = t; break; }
       }
-      if (!token) return; // 何も待機してない
+      if (!token) return;
     }
 
     const key = BRIDGE_PREFIX + token;
@@ -220,7 +279,7 @@
   }
 
   function installReceiverWatchdog() {
-    let tried = 0, maxTries = 300; // 最大30秒監視
+    let tried = 0, maxTries = 300; // 30s
     const tick = async () => {
       if (document.visibilityState !== 'visible') return;
       const input = findPromptInput();
@@ -235,25 +294,6 @@
     document.addEventListener('visibilitychange', tick, { once: true });
   }
 
-  function sendPromptToChatGPT(prompt, opts = {}) {
-    const autoSend = (opts.autoSend !== undefined) ? !!opts.autoSend : getAutoSend();
-    const token = genToken();
-    const content = (prompt || '').toString();
-    const MAX_LEN = 12000; // 安全上限
-    const payload = {
-      prompt: content.length > MAX_LEN ? content.slice(0, MAX_LEN) + '\n\n[...truncated...]' : content,
-      autoSend,
-      from: location.href,
-      ts: Date.now()
-    };
-    gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
-    queuePush(token); // ✅ キューに積む（リダイレクト・ログイン対策）
-    const target = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
-    try { GM_openInTab(target, { active: true, insert: true }); }
-    catch { window.open(target, '_blank', 'noopener'); }
-  }
-
-  // 受信側（chatgpt.com）はUI描画せず、受信＋適用のみ
   if (/chatgpt\.com$/i.test(location.hostname)) {
     installReceiverWatchdog();
     receiveAndApplyPromptIfAny();
@@ -263,18 +303,14 @@
   // =============================
   // UI（⚙️ + 🌐通常 + 🛠️強制）
   // =============================
-
-  // ---------- Keys / Const ----------
   const STYLE_ID  = 'cgpt-ui-style';
-  const STATE_KEY = 'cgpt_ui_state_v2';          // { mode:'corner'|'free', corner:'bottom-left', x,y, collapsed:true|false, __initialized_v122_toggle?:true }
-  const HOST_KEY  = 'cgpt_ui_hostprefs_v1';      // { "<host>": { enabled: true|false } }
-  const CHATGPT_URL = 'https://chatgpt.com/';
+  const STATE_KEY = 'cgpt_ui_state_v2';
+  const HOST_KEY  = 'cgpt_ui_hostprefs_v1';
   const CORNERS = ['bottom-left','bottom-right','top-right','top-left'];
   const LONGPRESS_MS = 600;
   const DRAG_THRESHOLD_PX = 6;
   const SNAP_RADIUS_PX = 64;
 
-  // ---------- Host prefs ----------
   const host = location.host;
   const prefs = loadJSON(HOST_KEY, {});
   if (typeof GM_registerMenuCommand === 'function') {
@@ -304,7 +340,6 @@
   }
   if (!enabled(host)) return;
 
-  // ---------- Style (once) ----------
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -333,7 +368,6 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  // ---------- State ----------
   const state = loadJSON(STATE_KEY, { mode:'corner', corner:'bottom-left', x:24, y:24, collapsed:true });
   if (state.__initialized_v122_toggle !== true) {
     state.collapsed = true;
@@ -341,10 +375,8 @@
     saveState();
   }
 
-  // 旧ランチャーDOMの事前掃除（残存UIを一掃）
   try { document.querySelectorAll('#chatgpt-ui-launcher').forEach(n => n.remove()); } catch {}
 
-  // ---------- UI ----------
   const container = document.createElement('div');
   container.id = 'chatgpt-ui-launcher';
   Object.assign(container.style, {
@@ -398,15 +430,15 @@
   applyCollapsed(state.collapsed);
   applyPositionFromState();
 
-  // DOM差し替えで消える場合の自動復帰
   new MutationObserver(() => {
     if (!document.getElementById('chatgpt-ui-launcher')) {
       document.body.appendChild(container);
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
 
-  // ---------- Drag / Long-press / Click ----------
+  // ---- Drag / Long-press ----
   let pressTimer=null, longPressed=false, dragging=false, startX=0, startY=0, startLeft=0, startTop=0, pointerId=null;
+  const LONGPRESS_MS = 600, DRAG_THRESHOLD_PX = 6, SNAP_RADIUS_PX = 64;
   const captureOpts = { capture: true };
 
   btnGear.addEventListener('pointerdown', (e) => {
@@ -477,7 +509,6 @@
     dragging = false; longPressed = false; pointerId = null;
   }
 
-  // ---------- Collapse / Position ----------
   function applyCollapsed(collapsed){
     btnNormal.style.display = collapsed ? 'none' : '';
     btnForce.style.display  = collapsed ? 'none'  : '';
@@ -550,7 +581,6 @@
   }
   function clamp(v, a, b){ return Math.min(b, Math.max(a, v)); }
 
-  // ---------- Long-press menu ----------
   function openMenuAt(x, y) {
     closePopups();
     const pop = document.createElement('div');
@@ -611,7 +641,6 @@
   }
   function closePopups(){ document.querySelectorAll('.cgpt-pop').forEach(n=>n.remove()); }
 
-  // ---------- Prompt Builders ----------
   function getPageTextSnippet(limit = 3500) {
     try {
       let t = (document.body && document.body.innerText) ? document.body.innerText : '';
@@ -645,7 +674,6 @@ If you can also directly access the URL with your browsing tools, you may use it
 Summarize the key points in Japanese using clear headers and bullet points.`;
   }
 
-  // ---------- Utils ----------
   function showToast(message, ms = 1500) {
     const toast = document.createElement('div');
     toast.className = 'cgpt-toast';
@@ -675,7 +703,7 @@ Summarize the key points in Japanese using clear headers and bullet points.`;
     return copied;
   }
 
-  function enabled(h){ return !prefs[h] || prefs[h].enabled !== false; }
+  function enabled(h){ const p = prefs[h]; return !p || p.enabled !== false; }
   function setHostEnabled(h, en){
     prefs[h] = { enabled: !!en };
     saveJSON(HOST_KEY, prefs);
