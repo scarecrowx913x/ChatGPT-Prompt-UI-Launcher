@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.2
+// @version      1.6.4
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -138,6 +138,21 @@
     return null;
   }
 
+  function normalizeForCompare(s) {
+    return String(s || '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/[\r\n\t ]+/g, ' ')
+      .trim();
+  }
+
+  function readInputValue(el) {
+    if (!el) return '';
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      return el.value || '';
+    }
+    return el.innerText || el.textContent || '';
+  }
+
   async function fillInput(el, text) {
     const val = String(text);
     const setNative = (node, value) => {
@@ -164,11 +179,33 @@
     if (el.getAttribute && el.getAttribute('contenteditable') === 'true') {
       el.focus();
       try {
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, val);
+        const sel = window.getSelection && window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        const ok = document.execCommand('insertText', false, val);
+        if (!ok) throw new Error('insertText returned false');
       } catch {
         el.textContent = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        try {
+          const sel = window.getSelection && window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        } catch {}
+        try {
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+        } catch {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
       }
       return;
     }
@@ -176,11 +213,13 @@
   }
 
   function verifyFilled(el, text) {
-    const t = String(text).slice(0, 12);
-    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-      return (el.value || '').slice(0, 12) === t;
-    }
-    return (el.textContent || '').slice(0, 12) === t;
+    const target = normalizeForCompare(text);
+    const actual = normalizeForCompare(readInputValue(el));
+    if (!target) return true;
+    if (!actual) return false;
+
+    const head = target.slice(0, 24);
+    return actual.startsWith(head) || actual.includes(head);
   }
 
   async function clickSendButton() {
@@ -216,19 +255,31 @@
 
     while (Date.now() < deadline) {
       inputEl = findPromptInput();
-      if (inputEl) {
+      if (inputEl && inputEl.isConnected) {
         await fillInput(inputEl, String(text));
-        ok = verifyFilled(inputEl, text);
-        if (ok) break;
+
+        // ChatGPT側の初期化直後は一瞬入って消えることがあるため、短時間の安定確認を行う
+        await sleep(120);
+        const stableCheck1 = verifyFilled(inputEl, text);
+        await sleep(420);
+        const liveEl = findPromptInput();
+        const stableCheck2 = liveEl && verifyFilled(liveEl, text);
+
+        ok = !!(stableCheck1 && stableCheck2);
+        if (ok) {
+          inputEl = liveEl || inputEl;
+          break;
+        }
       }
-      await sleep(300);
+      await sleep(260);
     }
-    if (!ok || !inputEl) return;
+    if (!ok || !inputEl) return false;
 
     if (autoSend) {
       const sent = await clickSendButton();
       if (!sent) tryEnter(inputEl);
     }
+    return true;
   }
 
   async function receiveAndApplyPromptIfAny() {
@@ -241,8 +292,8 @@
         const payload = decodePayload(b64);
         window.name = ''; // clear
         if (payload && payload.prompt) {
-          await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
-          setHashParam('launcher_applied', '1');
+          const applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
+          if (applied) setHashParam('launcher_applied', '1');
           return;
         }
       }
@@ -267,8 +318,7 @@
     try {
       const payload = JSON.parse(payloadStr);
       if (!payload || !payload.prompt) return;
-      await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
-      applied = true;
+      applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
     } finally {
       if (applied) {
         await gmDel(key);
