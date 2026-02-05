@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.2
+// @version      1.6.3
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -138,6 +138,21 @@
     return null;
   }
 
+  function normalizeForCompare(s) {
+    return String(s || '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/[\r\n\t ]+/g, ' ')
+      .trim();
+  }
+
+  function readInputValue(el) {
+    if (!el) return '';
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      return el.value || '';
+    }
+    return el.innerText || el.textContent || '';
+  }
+
   async function fillInput(el, text) {
     const val = String(text);
     const setNative = (node, value) => {
@@ -164,10 +179,32 @@
     if (el.getAttribute && el.getAttribute('contenteditable') === 'true') {
       el.focus();
       try {
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, val);
+        const sel = window.getSelection && window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+        const ok = document.execCommand('insertText', false, val);
+        if (!ok) throw new Error('insertText returned false');
       } catch {
         el.textContent = val;
+        try {
+          const sel = window.getSelection && window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        } catch {}
+        try {
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+        } catch {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         el.dispatchEvent(new Event('input', { bubbles: true }));
       }
       return;
@@ -176,11 +213,13 @@
   }
 
   function verifyFilled(el, text) {
-    const t = String(text).slice(0, 12);
-    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-      return (el.value || '').slice(0, 12) === t;
-    }
-    return (el.textContent || '').slice(0, 12) === t;
+    const target = normalizeForCompare(text);
+    const actual = normalizeForCompare(readInputValue(el));
+    if (!target) return true;
+    if (!actual) return false;
+
+    const head = target.slice(0, 24);
+    return actual.startsWith(head) || actual.includes(head);
   }
 
   async function clickSendButton() {
