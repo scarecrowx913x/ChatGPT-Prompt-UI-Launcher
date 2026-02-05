@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.4
+// @version      1.6.5
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -153,6 +153,32 @@
     return el.innerText || el.textContent || '';
   }
 
+  async function waitForStableComposer(ms = 6000) {
+    const until = Date.now() + ms;
+    let stableCount = 0;
+    let lastEl = null;
+
+    while (Date.now() < until) {
+      const el = findPromptInput();
+      const visible = !!(el && el.isConnected && el.offsetParent !== null);
+      const editable = !!(el && !el.matches('[disabled],[aria-disabled="true"]'));
+      const changed = el !== lastEl;
+
+      if (visible && editable && !changed) {
+        stableCount += 1;
+        if (stableCount >= 4) return el; // ~800ms stable
+      } else if (visible && editable) {
+        stableCount = 1;
+      } else {
+        stableCount = 0;
+      }
+
+      lastEl = el;
+      await sleep(200);
+    }
+    return findPromptInput();
+  }
+
   async function fillInput(el, text) {
     const val = String(text);
     const setNative = (node, value) => {
@@ -254,14 +280,14 @@
     let inputEl = null, ok = false;
 
     while (Date.now() < deadline) {
-      inputEl = findPromptInput();
+      inputEl = await waitForStableComposer(3000);
       if (inputEl && inputEl.isConnected) {
         await fillInput(inputEl, String(text));
 
-        // ChatGPT側の初期化直後は一瞬入って消えることがあるため、短時間の安定確認を行う
-        await sleep(120);
+        // 初期化/再マウントで消えるケースを避けるため、少し長めに保持確認
+        await sleep(220);
         const stableCheck1 = verifyFilled(inputEl, text);
-        await sleep(420);
+        await sleep(650);
         const liveEl = findPromptInput();
         const stableCheck2 = liveEl && verifyFilled(liveEl, text);
 
@@ -271,7 +297,7 @@
           break;
         }
       }
-      await sleep(260);
+      await sleep(320);
     }
     if (!ok || !inputEl) return false;
 
@@ -283,18 +309,20 @@
   }
 
   async function receiveAndApplyPromptIfAny() {
-    if (!/chatgpt\.com$/i.test(location.hostname)) return;
+    if (!/chatgpt\.com$/i.test(location.hostname)) return false;
 
     // ---- Route-C: window.name first ----
     try {
       if (typeof window.name === 'string' && window.name.startsWith('CGPTL|')) {
         const b64 = window.name.slice(6);
         const payload = decodePayload(b64);
-        window.name = ''; // clear
         if (payload && payload.prompt) {
           const applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
-          if (applied) setHashParam('launcher_applied', '1');
-          return;
+          if (applied) {
+            window.name = ''; // clear only after success
+            setHashParam('launcher_applied', '1');
+          }
+          return !!applied;
         }
       }
     } catch {}
@@ -307,18 +335,19 @@
         const exists = await gmGet(BRIDGE_PREFIX + t, null);
         if (exists) { token = t; break; }
       }
-      if (!token) return;
+      if (!token) return false;
     }
 
     const key = BRIDGE_PREFIX + token;
     const payloadStr = await gmGet(key, null);
-    if (!payloadStr) return;
+    if (!payloadStr) return false;
 
     let applied = false;
     try {
       const payload = JSON.parse(payloadStr);
-      if (!payload || !payload.prompt) return;
+      if (!payload || !payload.prompt) return false;
       applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
+      return !!applied;
     } finally {
       if (applied) {
         await gmDel(key);
@@ -332,9 +361,8 @@
     let tried = 0, maxTries = 300; // 30s
     const tick = async () => {
       if (document.visibilityState !== 'visible') return;
-      const input = findPromptInput();
-      if (input) {
-        await receiveAndApplyPromptIfAny();
+      const applied = await receiveAndApplyPromptIfAny();
+      if (applied) {
         clearInterval(loop);
       } else if (++tried >= maxTries) {
         clearInterval(loop);
