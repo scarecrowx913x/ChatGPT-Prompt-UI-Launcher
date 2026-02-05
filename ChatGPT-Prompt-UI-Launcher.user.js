@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.5
+// @version      1.6.6
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -359,22 +359,32 @@
 
   function installReceiverWatchdog() {
     let tried = 0, maxTries = 300; // 30s
+    let inFlight = false;
+
     const tick = async () => {
+      if (inFlight) return;
       if (document.visibilityState !== 'visible') return;
-      const applied = await receiveAndApplyPromptIfAny();
-      if (applied) {
-        clearInterval(loop);
-      } else if (++tried >= maxTries) {
-        clearInterval(loop);
+
+      inFlight = true;
+      try {
+        const applied = await receiveAndApplyPromptIfAny();
+        if (applied) {
+          clearInterval(loop);
+        } else if (++tried >= maxTries) {
+          clearInterval(loop);
+        }
+      } finally {
+        inFlight = false;
       }
     };
+
     const loop = setInterval(tick, 100);
+    tick(); // immediate first attempt (single-flight)
     document.addEventListener('visibilitychange', tick, { once: true });
   }
 
   if (/chatgpt\.com$/i.test(location.hostname)) {
     installReceiverWatchdog();
-    receiveAndApplyPromptIfAny();
     return;
   }
 
