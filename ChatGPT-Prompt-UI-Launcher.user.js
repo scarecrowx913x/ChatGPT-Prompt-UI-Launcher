@@ -126,19 +126,32 @@
   // Receiver on chatgpt.com
   // =============================
   function findPromptInput() {
+    // まず “本命” を最優先で探す（ChatGPT側の実装揺れに対応）
     const sels = [
+      'textarea#prompt-textarea',
       'textarea[data-testid="prompt-textarea"]',
-      'form textarea:not([disabled])',
-      'textarea[placeholder]:not([disabled])',
+      'textarea[aria-label*="Message" i]',
+      'textarea[placeholder*="Message" i]',
       'div[contenteditable="true"][data-lexical-editor]',
       'div[role="textbox"][contenteditable="true"]',
       'div[contenteditable="true"][data-placeholder]',
-      'div[contenteditable="true"]'
     ];
+
     for (const sel of sels) {
-      const el = document.querySelector(sel);
-      if (el) return el;
+      const nodes = document.querySelectorAll(sel);
+      for (const el of nodes) {
+        const editable = !el.matches('[disabled],[aria-disabled="true"]');
+        if (editable && isElementVisible(el)) return el;
+      }
     }
+
+    // 最終手段：見えてる textarea / contenteditable を総当り
+    const all = document.querySelectorAll('textarea, div[contenteditable="true"], [role="textbox"][contenteditable="true"]');
+    for (const el of all) {
+      const editable = !el.matches('[disabled],[aria-disabled="true"]');
+      if (editable && isElementVisible(el)) return el;
+    }
+
     return null;
   }
 
