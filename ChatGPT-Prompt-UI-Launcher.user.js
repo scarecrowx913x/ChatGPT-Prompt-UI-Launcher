@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.7.2
+// @version      1.7.3
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -374,56 +374,6 @@
   }
 
 
-  function buildConfirmMessage(promptText) {
-    const preview = String(promptText || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    return [
-      'ランチャーから受け取ったプロンプトを貼り付けますか？',
-      '',
-      preview ? `プレビュー: ${preview}${preview.length >= 140 ? '…' : ''}` : ''
-    ].filter(Boolean).join('\n');
-  }
-
-  function confirmPasteApply(promptText) {
-    try {
-      return window.confirm(buildConfirmMessage(promptText));
-    } catch {
-      return false;
-    }
-  }
-
-  function payloadFingerprint(payload, token = '') {
-    const p = payload || {};
-    const prompt = String(p.prompt || '');
-    const head = prompt.slice(0, 80);
-    const len = prompt.length;
-    const ts = String(p.ts || '0');
-    return `${token}|${ts}|${len}|${head}`;
-  }
-
-  function hasConfirmedForPayload(fingerprint) {
-    try {
-      return sessionStorage.getItem(CONFIRM_ONCE_KEY + fingerprint) === '1';
-    } catch {
-      return false;
-    }
-  }
-
-  function markConfirmedForPayload(fingerprint) {
-    try { sessionStorage.setItem(CONFIRM_ONCE_KEY + fingerprint, '1'); } catch {}
-  }
-
-  function clearConfirmedForPayload(fingerprint) {
-    try { sessionStorage.removeItem(CONFIRM_ONCE_KEY + fingerprint); } catch {}
-  }
-
-  function confirmPasteApplyOnce(payload, token = '') {
-    const fp = payloadFingerprint(payload, token);
-    if (hasConfirmedForPayload(fp)) return { confirmed: true, fingerprint: fp, prompted: false };
-    const confirmed = confirmPasteApply(payload && payload.prompt ? payload.prompt : '');
-    if (confirmed) markConfirmedForPayload(fp);
-    return { confirmed, fingerprint: fp, prompted: true };
-  }
-
   async function receiveAndApplyPromptIfAny() {
 
     if (!/chatgpt\.com$/i.test(location.hostname)) return false;
@@ -437,17 +387,8 @@
           const composer = await waitForComposerReady(30000);
           if (!composer) return false;
 
-          const confirmState = confirmPasteApplyOnce(payload, 'wn');
-          if (!confirmState.confirmed) {
-            clearConfirmedForPayload(confirmState.fingerprint);
-            window.name = '';
-            setHashParam('launcher_declined', '1');
-            return true;
-          }
-
           const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
           if (result === 'applied') {
-            clearConfirmedForPayload(confirmState.fingerprint);
             window.name = ''; // clear only after success
             setHashParam('launcher_applied', '1');
             return true;
@@ -480,18 +421,8 @@
       const composer = await waitForComposerReady(30000);
       if (!composer) return false;
 
-      const confirmState = confirmPasteApplyOnce(payload, token);
-      if (!confirmState.confirmed) {
-        clearConfirmedForPayload(confirmState.fingerprint);
-        await gmDel(key);
-        await queueRemove(token);
-        setHashParam('launcher_declined', '1');
-        return true;
-      }
-
       const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
       applied = (result === 'applied');
-      if (applied) clearConfirmedForPayload(confirmState.fingerprint);
       return applied;
     } finally {
       if (applied) {
