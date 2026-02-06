@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.7.0
+// @version      1.7.1
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -98,25 +98,28 @@
       ts: Date.now()
     };
 
+    // Route-C/Route-Bの二重タブ化を避けるため、まずRoute-B情報を準備する。
+    const token = genToken();
+    gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
+    queuePush(token);
+    const routeBTarget = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
+
     // --- Route-C: window.name bridge (preferred; robust on mobile) ---
+    // about:blankを経由すると遷移失敗時に空タブが残りやすいため、直接chatgpt.comを開く。
     try {
-      const w = window.open('about:blank', '_blank'); // no noopener here (we need to set name)
+      const w = window.open('https://chatgpt.com/#from=wn', '_blank');
       if (w) {
-        w.name = 'CGPTL|' + encodePayload(payload);   // persist across cross-origin nav
+        try { w.name = 'CGPTL|' + encodePayload(payload); } catch {}
         try { w.opener = null; } catch {}
-        w.location.href = 'https://chatgpt.com/#from=wn';
         return;
       }
     } catch {}
 
-    // --- Route-B: GM storage + #token fallback ---
-    const token = genToken();
-    gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
-    queuePush(token);
-    const target = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
-    try { GM_openInTab(target, { active: true, insert: true }); }
-    catch { window.open(target, '_blank', 'noopener'); }
+    // --- Route-B fallback: popup handle unavailable ---
+    try { GM_openInTab(routeBTarget, { active: true, insert: true }); }
+    catch { window.open(routeBTarget, '_blank', 'noopener'); }
   }
+
 
   // =============================
   // Receiver on chatgpt.com
