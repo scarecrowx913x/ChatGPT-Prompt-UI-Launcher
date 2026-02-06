@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.9
+// @version      1.7.0
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -316,7 +316,17 @@
     } catch {}
   }
 
-  async function applyPromptToChatGPTUI(text, { autoSend, confirmBeforePaste = false }) {
+  async function waitForComposerReady(totalMs = 30000) {
+    const deadline = Date.now() + totalMs;
+    while (Date.now() < deadline) {
+      const el = await waitForStableComposer(3000);
+      if (el && el.isConnected) return el;
+      await sleep(200);
+    }
+    return null;
+  }
+
+  async function applyPromptToChatGPTUI(text, { autoSend }) {
     const deadline = Date.now() + 30000; // up to 30s
     let inputEl = null, ok = false;
     let confirmDone = !confirmBeforePaste;
@@ -325,13 +335,6 @@
       inputEl = await waitForStableComposer(3000);
       if (inputEl && inputEl.isConnected) {
         const payloadText = String(text);
-
-        // 認証・初期化が終わって入力欄が安定してから確認ダイアログを出す
-        if (!confirmDone) {
-          const confirmed = confirmPasteApply(payloadText);
-          if (!confirmed) return 'declined';
-          confirmDone = true;
-        }
 
         await fillInput(inputEl, payloadText);
 
@@ -384,24 +387,6 @@
     }
   }
 
-
-  function buildConfirmMessage(promptText) {
-    const preview = String(promptText || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    return [
-      'ランチャーから受け取ったプロンプトを貼り付けますか？',
-      '',
-      preview ? `プレビュー: ${preview}${preview.length >= 140 ? '…' : ''}` : ''
-    ].filter(Boolean).join('\n');
-  }
-
-  function confirmPasteApply(promptText) {
-    try {
-      return window.confirm(buildConfirmMessage(promptText));
-    } catch {
-      return false;
-    }
-  }
-
   async function receiveAndApplyPromptIfAny() {
     if (!/chatgpt\.com$/i.test(location.hostname)) return false;
 
@@ -411,17 +396,17 @@
         const b64 = window.name.slice(6);
         const payload = decodePayload(b64);
         if (payload && payload.prompt) {
-          const result = await applyPromptToChatGPTUI(payload.prompt, {
-            autoSend: !!payload.autoSend,
-            confirmBeforePaste: true
-          });
+          const composer = await waitForComposerReady(30000);
+          if (!composer) return false;
 
-          if (result === 'declined') {
+          const confirmed = confirmPasteApply(payload.prompt);
+          if (!confirmed) {
             window.name = '';
             setHashParam('launcher_declined', '1');
             return true;
           }
 
+          const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
           if (result === 'applied') {
             window.name = ''; // clear only after success
             setHashParam('launcher_applied', '1');
@@ -452,18 +437,18 @@
       const payload = JSON.parse(payloadStr);
       if (!payload || !payload.prompt) return false;
 
-      const result = await applyPromptToChatGPTUI(payload.prompt, {
-        autoSend: !!payload.autoSend,
-        confirmBeforePaste: true
-      });
+      const composer = await waitForComposerReady(30000);
+      if (!composer) return false;
 
-      if (result === 'declined') {
+      const confirmed = confirmPasteApply(payload.prompt);
+      if (!confirmed) {
         await gmDel(key);
         await queueRemove(token);
         setHashParam('launcher_declined', '1');
         return true;
       }
 
+      const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
       applied = (result === 'applied');
       return applied;
     } finally {
