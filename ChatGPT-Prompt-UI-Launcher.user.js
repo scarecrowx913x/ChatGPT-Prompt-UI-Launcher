@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Prompt UI Launcher (UI: Normal/Force + RouteB/RouteC Bridge)
 // @namespace    https://github.com/junx913x/chatgpt-ui-launcher
-// @version      1.6.6
+// @version      1.6.9
 // @description  ChatGPTランチャー（🌐通常／🛠️強制）＋ 自動入力・自動送信。Route-C(window.name)優先→Route-B(GMストレージ)へフォールバック。ドラッグ移動、四隅吸着、折りたたみ、サイト別ON/OFF、DOM置換耐性、貼付自己修復、ログイン/遅延耐性強化。
 // @author       scarecrowx913x
 // @match        *://*/*
@@ -153,6 +153,16 @@
     return el.innerText || el.textContent || '';
   }
 
+  function isElementVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const style = window.getComputedStyle(el);
+    if (!style) return false;
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    if (Number(style.opacity || 1) === 0) return false;
+    const rects = el.getClientRects();
+    return !!(rects && rects.length > 0);
+  }
+
   async function waitForStableComposer(ms = 6000) {
     const until = Date.now() + ms;
     let stableCount = 0;
@@ -160,7 +170,7 @@
 
     while (Date.now() < until) {
       const el = findPromptInput();
-      const visible = !!(el && el.isConnected && el.offsetParent !== null);
+      const visible = isElementVisible(el);
       const editable = !!(el && !el.matches('[disabled],[aria-disabled="true"]'));
       const changed = el !== lastEl;
 
@@ -204,6 +214,27 @@
     }
     if (el.getAttribute && el.getAttribute('contenteditable') === 'true') {
       el.focus();
+
+      // Strategy 1: synthetic paste (closest to real user behavior)
+      try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', val);
+        const pasteEv = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+        el.dispatchEvent(pasteEv);
+        if (verifyFilled(el, val)) return;
+      } catch {}
+
+      // Strategy 2: beforeinput/input for editors that ignore execCommand
+      try {
+        const beforeEv = new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertFromPaste',
+          data: val
+        });
+        el.dispatchEvent(beforeEv);
+      } catch {}
+
       try {
         const sel = window.getSelection && window.getSelection();
         const range = document.createRange();
@@ -214,6 +245,7 @@
         }
         const ok = document.execCommand('insertText', false, val);
         if (!ok) throw new Error('insertText returned false');
+        if (verifyFilled(el, val)) return;
       } catch {
         el.textContent = val;
         try {
@@ -232,7 +264,16 @@
           el.dispatchEvent(new Event('input', { bubbles: true }));
         }
         el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (verifyFilled(el, val)) return;
       }
+
+      // Strategy 3: final fallback for lexical-style editors
+      try {
+        const p = document.createElement('p');
+        p.textContent = val;
+        el.replaceChildren(p);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+      } catch {}
       return;
     }
     try { el.textContent = val; } catch {}
@@ -275,23 +316,40 @@
     } catch {}
   }
 
-  async function applyPromptToChatGPTUI(text, { autoSend }) {
+  async function applyPromptToChatGPTUI(text, { autoSend, confirmBeforePaste = false }) {
     const deadline = Date.now() + 30000; // up to 30s
     let inputEl = null, ok = false;
+    let confirmDone = !confirmBeforePaste;
 
     while (Date.now() < deadline) {
       inputEl = await waitForStableComposer(3000);
       if (inputEl && inputEl.isConnected) {
-        await fillInput(inputEl, String(text));
+        const payloadText = String(text);
+
+        // 認証・初期化が終わって入力欄が安定してから確認ダイアログを出す
+        if (!confirmDone) {
+          const confirmed = confirmPasteApply(payloadText);
+          if (!confirmed) return 'declined';
+          confirmDone = true;
+        }
+
+        await fillInput(inputEl, payloadText);
 
         // 初期化/再マウントで消えるケースを避けるため、少し長めに保持確認
-        await sleep(220);
-        const stableCheck1 = verifyFilled(inputEl, text);
-        await sleep(650);
+        await sleep(120);
+        const stableCheck1 = verifyFilled(inputEl, payloadText);
+        await sleep(260);
         const liveEl = findPromptInput();
-        const stableCheck2 = liveEl && verifyFilled(liveEl, text);
+        const stableCheck2 = liveEl && verifyFilled(liveEl, payloadText);
 
-        ok = !!(stableCheck1 && stableCheck2);
+        // remount復旧: 要素が差し替わった場合に1回だけ再投入
+        if (!stableCheck2 && liveEl && liveEl !== inputEl) {
+          await fillInput(liveEl, payloadText);
+          await sleep(150);
+        }
+        const stableCheck3 = liveEl && verifyFilled(liveEl, payloadText);
+
+        ok = !!((stableCheck1 && stableCheck2) || stableCheck3);
         if (ok) {
           inputEl = liveEl || inputEl;
           break;
@@ -299,13 +357,31 @@
       }
       await sleep(320);
     }
-    if (!ok || !inputEl) return false;
+    if (!ok || !inputEl) return 'failed';
 
     if (autoSend) {
       const sent = await clickSendButton();
       if (!sent) tryEnter(inputEl);
     }
-    return true;
+    return 'applied';
+  }
+
+
+  function buildConfirmMessage(promptText) {
+    const preview = String(promptText || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    return [
+      'ランチャーから受け取ったプロンプトを貼り付けますか？',
+      '',
+      preview ? `プレビュー: ${preview}${preview.length >= 140 ? '…' : ''}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  function confirmPasteApply(promptText) {
+    try {
+      return window.confirm(buildConfirmMessage(promptText));
+    } catch {
+      return false;
+    }
   }
 
   async function receiveAndApplyPromptIfAny() {
@@ -317,12 +393,23 @@
         const b64 = window.name.slice(6);
         const payload = decodePayload(b64);
         if (payload && payload.prompt) {
-          const applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
-          if (applied) {
+          const result = await applyPromptToChatGPTUI(payload.prompt, {
+            autoSend: !!payload.autoSend,
+            confirmBeforePaste: true
+          });
+
+          if (result === 'declined') {
+            window.name = '';
+            setHashParam('launcher_declined', '1');
+            return true;
+          }
+
+          if (result === 'applied') {
             window.name = ''; // clear only after success
             setHashParam('launcher_applied', '1');
+            return true;
           }
-          return !!applied;
+          return false;
         }
       }
     } catch {}
@@ -346,8 +433,21 @@
     try {
       const payload = JSON.parse(payloadStr);
       if (!payload || !payload.prompt) return false;
-      applied = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
-      return !!applied;
+
+      const result = await applyPromptToChatGPTUI(payload.prompt, {
+        autoSend: !!payload.autoSend,
+        confirmBeforePaste: true
+      });
+
+      if (result === 'declined') {
+        await gmDel(key);
+        await queueRemove(token);
+        setHashParam('launcher_declined', '1');
+        return true;
+      }
+
+      applied = (result === 'applied');
+      return applied;
     } finally {
       if (applied) {
         await gmDel(key);
