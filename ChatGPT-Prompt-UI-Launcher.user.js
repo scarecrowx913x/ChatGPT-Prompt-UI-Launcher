@@ -384,6 +384,24 @@
     }
   }
 
+
+  function buildConfirmMessage(promptText) {
+    const preview = String(promptText || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    return [
+      'ランチャーから受け取ったプロンプトを貼り付けますか？',
+      '',
+      preview ? `プレビュー: ${preview}${preview.length >= 140 ? '…' : ''}` : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  function confirmPasteApply(promptText) {
+    try {
+      return window.confirm(buildConfirmMessage(promptText));
+    } catch {
+      return false;
+    }
+  }
+
   async function receiveAndApplyPromptIfAny() {
     if (!/chatgpt\.com$/i.test(location.hostname)) return false;
 
