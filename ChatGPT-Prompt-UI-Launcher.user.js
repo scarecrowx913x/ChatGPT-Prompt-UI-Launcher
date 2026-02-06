@@ -329,6 +329,7 @@
   async function applyPromptToChatGPTUI(text, { autoSend }) {
     const deadline = Date.now() + 30000; // up to 30s
     let inputEl = null, ok = false;
+    let confirmDone = !confirmBeforePaste;
 
     while (Date.now() < deadline) {
       inputEl = await waitForStableComposer(3000);
