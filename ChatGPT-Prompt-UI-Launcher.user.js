@@ -30,6 +30,7 @@
   const BRIDGE_PREFIX = 'cgpt_launcher_payload_';
   const QUEUE_KEY     = 'cgpt_launcher_queue_v1';
   const AUTOSEND_KEY  = 'cgpt_launcher_autosend_v1';
+  const CONFIRM_ONCE_KEY = 'cgpt_launcher_confirm_once_v1';
   const DEFAULT_AUTOSEND = false;
 
   // ---- GM wrappers ----
@@ -332,6 +333,7 @@
   async function applyPromptToChatGPTUI(text, { autoSend }) {
     const deadline = Date.now() + 30000; // up to 30s
     let inputEl = null, ok = false;
+    let confirmDone = !confirmBeforePaste;
 
     while (Date.now() < deadline) {
       inputEl = await waitForStableComposer(3000);
