@@ -421,7 +421,7 @@
       }
     } catch {}
 
-    // ---- Route-B: GM storage + #token / queue ----
+    // ---- Route-B: GM storage + #token (session-scoped) ----
     let token = getHashParam('launcher');
     if (token) {
       try { sessionStorage.setItem(SESSION_TOKEN_KEY, token); } catch {}
