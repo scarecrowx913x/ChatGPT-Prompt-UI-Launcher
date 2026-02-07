@@ -386,6 +386,10 @@
   }
 
 
+  const MAX_PAYLOAD_AGE_MS = 2 * 60 * 1000;
+  const FORCE_DISABLE_AUTOSEND = true;
+  const SESSION_TOKEN_KEY = 'cgpt_launcher_session_token_v1';
+
   async function receiveAndApplyPromptIfAny() {
 
     if (!/chatgpt\.com$/i.test(location.hostname)) return false;
@@ -395,11 +399,18 @@
       if (typeof window.name === 'string' && window.name.startsWith('CGPTL|')) {
         const b64 = window.name.slice(6);
         const payload = decodePayload(b64);
+        const tooOld = payload?.ts && (Date.now() - payload.ts > MAX_PAYLOAD_AGE_MS);
+        if (tooOld) {
+          window.name = '';
+          return false;
+        }
         if (payload && payload.prompt) {
           const composer = await waitForComposerReady(30000);
           if (!composer) return false;
 
-          const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
+          const result = await applyPromptToChatGPTUI(payload.prompt, {
+            autoSend: FORCE_DISABLE_AUTOSEND ? false : !!payload.autoSend
+          });
           if (result === 'applied') {
             window.name = ''; // clear only after success
             setHashParam('launcher_applied', '1');
@@ -410,22 +421,21 @@
       }
     } catch {}
 
-    // ---- Route-B: GM storage + #token / queue ----
+    // ---- Route-B: GM storage + #token (session-scoped) ----
     let token = getHashParam('launcher');
-    if (!token) {
-      const q = await queueRead();
-      for (const t of q) {
-        const exists = await gmGet(BRIDGE_PREFIX + t, null);
-        if (exists) { token = t; break; }
-      }
-      if (!token) return false;
+    if (token) {
+      try { sessionStorage.setItem(SESSION_TOKEN_KEY, token); } catch {}
+    } else {
+      try { token = sessionStorage.getItem(SESSION_TOKEN_KEY) || null; } catch {}
     }
+    if (!token) return false;
 
     const key = BRIDGE_PREFIX + token;
     const payloadStr = await gmGet(key, null);
     if (!payloadStr) return false;
 
     let applied = false;
+    let shouldDiscard = false;
     try {
       const payload = JSON.parse(payloadStr);
       if (!payload || !payload.prompt) return false;
@@ -433,13 +443,19 @@
       const composer = await waitForComposerReady(30000);
       if (!composer) return false;
 
-      const result = await applyPromptToChatGPTUI(payload.prompt, { autoSend: !!payload.autoSend });
+      const tooOld = payload?.ts && (Date.now() - payload.ts > MAX_PAYLOAD_AGE_MS);
+      if (tooOld) { shouldDiscard = true; return false; }
+
+      const result = await applyPromptToChatGPTUI(payload.prompt, {
+        autoSend: FORCE_DISABLE_AUTOSEND ? false : !!payload.autoSend
+      });
       applied = (result === 'applied');
       return applied;
     } finally {
-      if (applied) {
+      if (applied || shouldDiscard) {
         await gmDel(key);
         await queueRemove(token);
+        try { sessionStorage.removeItem(SESSION_TOKEN_KEY); } catch {}
         setHashParam('launcher_applied', '1');
       }
     }
