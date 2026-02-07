@@ -92,7 +92,9 @@
     const autoSend = (opts.autoSend !== undefined) ? !!opts.autoSend : getAutoSend();
     const content = (prompt || '').toString();
     const MAX_LEN = 12000; // overall safety
+    const token = genToken();
     const payload = {
+      token,
       prompt: content.length > MAX_LEN ? content.slice(0, MAX_LEN) + '\n\n[...truncated...]' : content,
       autoSend,
       from: location.href,
@@ -100,9 +102,10 @@
     };
 
     // Route-C/Route-Bの二重タブ化を避けるため、まずRoute-B情報を準備する。
-    const token = genToken();
     gmSet(BRIDGE_PREFIX + token, JSON.stringify(payload));
     queuePush(token);
+    gmSet(LAST_SENT_TS_KEY, payload.ts);
+    gmSet(LAST_SENT_TOKEN_KEY, token);
     const routeBTarget = `https://chatgpt.com/#launcher=${encodeURIComponent(token)}`;
 
     // --- Route-C: window.name bridge (preferred; robust on mobile) ---
@@ -389,6 +392,8 @@
   const MAX_PAYLOAD_AGE_MS = 2 * 60 * 1000;
   const FORCE_DISABLE_AUTOSEND = true;
   const SESSION_TOKEN_KEY = 'cgpt_launcher_session_token_v1';
+  const LAST_SENT_TS_KEY = 'cgpt_launcher_last_sent_ts_v1';
+  const LAST_SENT_TOKEN_KEY = 'cgpt_launcher_last_sent_token_v1';
 
   async function receiveAndApplyPromptIfAny() {
 
@@ -399,6 +404,11 @@
       if (typeof window.name === 'string' && window.name.startsWith('CGPTL|')) {
         const b64 = window.name.slice(6);
         const payload = decodePayload(b64);
+        const latestTs = await gmGet(LAST_SENT_TS_KEY, 0);
+        if (latestTs && payload?.ts && payload.ts < latestTs) {
+          window.name = '';
+          return false;
+        }
         const tooOld = payload?.ts && (Date.now() - payload.ts > MAX_PAYLOAD_AGE_MS);
         if (tooOld) {
           window.name = '';
@@ -413,6 +423,15 @@
           });
           if (result === 'applied') {
             window.name = ''; // clear only after success
+            if (payload?.token) {
+              await gmDel(BRIDGE_PREFIX + payload.token);
+              await queueRemove(payload.token);
+              const lastToken = await gmGet(LAST_SENT_TOKEN_KEY, null);
+              if (lastToken === payload.token) {
+                await gmDel(LAST_SENT_TOKEN_KEY);
+                await gmDel(LAST_SENT_TS_KEY);
+              }
+            }
             setHashParam('launcher_applied', '1');
             return true;
           }
@@ -436,8 +455,9 @@
 
     let applied = false;
     let shouldDiscard = false;
+    let payload = null;
     try {
-      const payload = JSON.parse(payloadStr);
+      payload = JSON.parse(payloadStr);
       if (!payload || !payload.prompt) return false;
 
       const composer = await waitForComposerReady(30000);
@@ -456,6 +476,13 @@
         await gmDel(key);
         await queueRemove(token);
         try { sessionStorage.removeItem(SESSION_TOKEN_KEY); } catch {}
+        if (payload?.token) {
+          const lastToken = await gmGet(LAST_SENT_TOKEN_KEY, null);
+          if (lastToken === payload.token) {
+            await gmDel(LAST_SENT_TOKEN_KEY);
+            await gmDel(LAST_SENT_TS_KEY);
+          }
+        }
         setHashParam('launcher_applied', '1');
       }
     }
